@@ -6,7 +6,7 @@ exercise persistence in isolation from the pipeline.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable
 from uuid import uuid4
 
 import pytest
@@ -16,16 +16,11 @@ from tripfinder.domain.models import Research, ResearchStatus, Result
 from tripfinder.persistence.repositories import ResearchNotFoundError, ResearchRepository
 
 
-def _research(query: str = "underrated US nature destinations") -> Research:
-    return Research(
-        original_query=query, created_at=datetime.now(UTC), status=ResearchStatus.PENDING
-    )
-
-
 async def test_create_and_get_round_trip(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = _research()
+    research = make_research()
 
     async with session_factory() as session:
         await ResearchRepository(session).create(research)
@@ -50,10 +45,11 @@ async def test_get_returns_none_for_unknown_id(
 
 async def test_repeated_identical_search_creates_two_distinct_records(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
     """Plan §10 Phase 3 acceptance: two identical searches, two distinct records."""
-    first = _research()
-    second = _research()
+    first = make_research()
+    second = make_research()
 
     assert first.id != second.id
 
@@ -75,8 +71,9 @@ async def test_repeated_identical_search_creates_two_distinct_records(
 
 async def test_save_persists_updated_status_and_results(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = _research()
+    research = make_research()
     async with session_factory() as session:
         await ResearchRepository(session).create(research)
 
@@ -111,8 +108,9 @@ async def test_save_persists_updated_status_and_results(
 
 async def test_save_on_never_created_research_raises(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = _research()  # never persisted via create()
+    research = make_research()  # never persisted via create()
 
     async with session_factory() as session:
         with pytest.raises(ResearchNotFoundError):
@@ -121,9 +119,10 @@ async def test_save_on_never_created_research_raises(
 
 async def test_completed_research_can_be_retrieved_after_a_fresh_session(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
     """PROJECT.md §3 Phase 3: completed research can be retrieved (resume/read)."""
-    research = _research()
+    research = make_research()
     research.status = ResearchStatus.COMPLETED
     research.results = [
         Result(

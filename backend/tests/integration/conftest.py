@@ -7,7 +7,8 @@ tables are truncated after each test so tests stay independent.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from testcontainers.community.postgres import PostgresContainer
 
+from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.persistence.database import make_engine, make_session_factory
 from tripfinder.persistence.orm import Base
 
@@ -52,3 +54,15 @@ async def session_factory(
             for table in reversed(Base.metadata.sorted_tables):
                 await connection.execute(table.delete())
         await engine.dispose()
+
+
+@pytest.fixture
+def make_research() -> Callable[..., Research]:
+    """Factory for a fresh, unpersisted ``Research`` (shared across integration tests)."""
+
+    def _make(query: str = "underrated US nature destinations") -> Research:
+        return Research(
+            original_query=query, created_at=datetime.now(UTC), status=ResearchStatus.PENDING
+        )
+
+    return _make

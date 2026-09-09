@@ -7,7 +7,7 @@ pipeline is fake.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,16 +18,11 @@ from tripfinder.jobs.worker_loop import run_once, run_worker_loop
 from tripfinder.persistence.repositories import ResearchRepository
 
 
-def _research(query: str = "underrated US nature destinations") -> Research:
-    return Research(
-        original_query=query, created_at=datetime.now(UTC), status=ResearchStatus.PENDING
-    )
-
-
 async def test_run_once_processes_a_claimed_job_end_to_end(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = _research()
+    research = make_research()
     async with session_factory() as session:
         await ResearchRepository(session).create(research)
     async with session_factory() as session:
@@ -54,10 +49,11 @@ async def test_run_once_returns_false_when_the_queue_is_empty(
 
 async def test_two_identical_searches_produce_two_distinct_completed_records(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
     """Plan §10 Phase 3 acceptance, exercised end-to-end through the worker."""
-    first = _research()
-    second = _research()
+    first = make_research()
+    second = make_research()
 
     async with session_factory() as session:
         repo = ResearchRepository(session)
@@ -83,10 +79,11 @@ async def test_two_identical_searches_produce_two_distinct_completed_records(
 
 async def test_run_once_marks_job_failed_and_leaves_research_untouched_on_pipeline_error(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A mid-run failure must not be silently swallowed or marked as success."""
-    research = _research()
+    research = make_research()
     async with session_factory() as session:
         await ResearchRepository(session).create(research)
     async with session_factory() as session:

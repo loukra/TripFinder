@@ -7,7 +7,8 @@ queue safe for a polling worker.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -18,14 +19,11 @@ from tripfinder.jobs.repository import JobNotFoundError, JobRepository
 from tripfinder.persistence.repositories import ResearchRepository
 
 
-def _research(query: str = "underrated US nature destinations") -> Research:
-    return Research(
-        original_query=query, created_at=datetime.now(UTC), status=ResearchStatus.PENDING
-    )
-
-
-async def _create_research(session_factory: async_sessionmaker[AsyncSession]) -> Research:
-    research = _research()
+async def _create_research(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> Research:
+    research = make_research()
     async with session_factory() as session:
         await ResearchRepository(session).create(research)
     return research
@@ -33,8 +31,9 @@ async def _create_research(session_factory: async_sessionmaker[AsyncSession]) ->
 
 async def test_enqueue_and_claim_next(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
 
     async with session_factory() as session:
         job_id = await JobRepository(session).enqueue(research.id)
@@ -58,8 +57,9 @@ async def test_claim_next_returns_none_when_queue_is_empty(
 
 async def test_a_claimed_job_is_not_claimed_again(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
     async with session_factory() as session:
         await JobRepository(session).enqueue(research.id)
 
@@ -74,8 +74,9 @@ async def test_a_claimed_job_is_not_claimed_again(
 
 async def test_mark_succeeded_updates_status(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
     async with session_factory() as session:
         job_id = await JobRepository(session).enqueue(research.id)
 
@@ -88,8 +89,9 @@ async def test_mark_succeeded_updates_status(
 
 async def test_mark_failed_updates_status_and_records_error(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
     async with session_factory() as session:
         job_id = await JobRepository(session).enqueue(research.id)
 
@@ -110,9 +112,10 @@ async def test_operations_on_an_unknown_job_id_raise(
 
 async def test_requeue_stale_recovers_a_crashed_worker_job(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
     """Plan §10 Phase 3 acceptance: a worker crash mid-run leaves recoverable state."""
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
     async with session_factory() as session:
         job_id = await JobRepository(session).enqueue(research.id)
 
@@ -147,8 +150,9 @@ async def test_requeue_stale_recovers_a_crashed_worker_job(
 
 async def test_requeue_stale_leaves_recently_claimed_jobs_alone(
     session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
 ) -> None:
-    research = await _create_research(session_factory)
+    research = await _create_research(session_factory, make_research)
     async with session_factory() as session:
         job_id = await JobRepository(session).enqueue(research.id)
     async with session_factory() as session:
