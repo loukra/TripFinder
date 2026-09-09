@@ -74,7 +74,7 @@ amendment, not an implementation detail.
 | Model config | Model IDs in config only. **Never in the domain layer** | `PROJECT.md` §13 |
 | Source | **Arctic Shift only** (`https://arctic-shift.photon-reddit.com`) | No API key or approval needed. Official Reddit API requires manual approval since Nov 2025 |
 | Source port | `SourceAdapter` port **is still built**; only one adapter implements it | Preserves §10 without speculative second adapter |
-| Local dev | Docker Compose: postgres + backend + worker + frontend | |
+| Local dev | **Hybrid** — Postgres in Docker, backend/worker/frontend native. Compose `full` profile runs everything | Hot reload where you edit; hermetic Postgres for tests |
 | Testing | pytest (backend), Vitest + Playwright (frontend) | |
 | Lint / format / types | ruff + mypy (strict) backend; eslint + tsc frontend | |
 
@@ -262,6 +262,31 @@ TripFinder/
     ├── package.json
     └── src/{app,components,lib}/
 ```
+
+### 3.2 Running locally — hybrid
+
+Postgres runs in Docker; backend, worker and frontend run natively. Containers give a disposable,
+version-correct database and hermetic tests (testcontainers, §9); native processes give hot reload
+on the code actually being edited. Rebuilding an image on every keystroke is the cost this avoids.
+
+`docker-compose.yml` uses **profiles**: Postgres is the default service, and everything else sits
+behind a `full` profile for whole-stack runs and as the deployment artifact.
+
+Phase 0 must provide these targets, each routing Python through `uv run`:
+
+| Command | Does |
+|---|---|
+| `make db` | Start Postgres in Docker (detached) |
+| `make db-stop` | Stop it |
+| `make api` | FastAPI natively, reload on |
+| `make worker` | Job worker natively |
+| `make web` | Next.js dev server |
+| `make test` | Unit + integration (starts its own throwaway Postgres) |
+| `make lint` / `make typecheck` | ruff + eslint / mypy + tsc |
+| `make stack` | `docker compose --profile full up` — everything containerised |
+
+Day-to-day: `make db` once, then `make api`, `make worker`, `make web` in separate terminals.
+Postgres port is configurable via `.env` (default 5432) so a future local install cannot collide.
 
 **Import rule, enforced by a test:** `domain/` and `ranking/` may not import from `sources/`,
 `ai/`, `persistence/`, `api/`, or any third-party framework. A test walks the AST and fails the
@@ -667,7 +692,7 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 
 | # | Phase | Depends on | Ships |
 |---|---|---|---|
-| 0 | Foundation | — | Repo, Docker Compose, CI, lint/type/test all green on an empty project |
+| 0 | Foundation | — | Repo, Compose (Postgres + `full` profile), Makefile, CI, lint/type/test green on an empty project |
 | 1 | Domain contracts | 0 | Pydantic domain models, `SourceAdapter` + `LLMProvider` protocols, budget config, import-boundary test |
 | 2 | Fake pipeline | 1 | Step protocol, runner, progress, fake source + fake LLM, full fake run query→result |
 | 3 | Persistence | 2 | Postgres schema, Alembic, repositories, job table, worker loop |
@@ -687,8 +712,9 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 
 ### Notable phase details
 
-**Phase 0 — acceptance:** `docker compose up` starts everything; `make test`, `make lint`,
-`make typecheck` all pass with zero business logic present. CI runs all three.
+**Phase 0 — acceptance:** `make db` starts Postgres in Docker and it accepts connections;
+`docker compose --profile full up` starts every service; `make test`, `make lint`, `make typecheck`
+all pass with zero business logic present. CI runs all three. See §3.2 for the required commands.
 
 **Phase 1 — acceptance:** every domain object round-trips through serialization; invalid data is
 rejected with a useful error; the import-boundary test passes. No network, no DB.

@@ -49,7 +49,18 @@ Python 3.12.14 (via `uv`, pinned in `.python-version`) · FastAPI · Pydantic v2
 
 ## Commands
 
-Populated during Phase 0. Expected: `make test`, `make lint`, `make typecheck`, `docker compose up`.
+Populated during Phase 0. **Postgres runs in Docker; backend, worker and frontend run natively** —
+hot reload where you edit, hermetic Postgres for tests (plan §3.2).
+
+| Command | Does |
+|---|---|
+| `make db` / `make db-stop` | Postgres in Docker |
+| `make api` · `make worker` · `make web` | The three native processes |
+| `make test` · `make lint` · `make typecheck` | Verification |
+| `make stack` | Everything containerised (`--profile full`) |
+
+Typical session: `make db` once, then `make api`, `make worker`, `make web` in separate terminals.
+Do not containerise the backend or frontend for day-to-day work.
 
 Use `uv` for all Python work — `uv sync` to install, `uv run pytest` to run. It owns the
 interpreter, the venv, and the lockfile.
