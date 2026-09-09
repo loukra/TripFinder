@@ -21,7 +21,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,7 +31,7 @@ services:
     build: ./backend
     command: ["python", "-m", "tripfinder.worker"]
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
     depends_on:
       postgres:
         condition: service_healthy

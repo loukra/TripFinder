@@ -44,6 +44,15 @@ def build_fake_pipeline_context(query: str) -> PipelineContext:
         created_at=datetime.now(UTC),
         status=ResearchStatus.PENDING,
     )
+    return build_fake_pipeline_context_for(research)
+
+
+def build_fake_pipeline_context_for(research: Research) -> PipelineContext:
+    """A ready-to-run context wired to the default fixtures, for an existing research.
+
+    Used by the worker (plan §10 Phase 3) to run the fake pipeline against a
+    research aggregate that already has a persisted identity.
+    """
     source = FakeSourceAdapter(documents=fixture_documents(), comments=fixture_comments())
     llm = FakeLLMProvider({FakeAnalysisResponse: _DEFAULT_MENTIONS})
     return PipelineContext(research=research, source=source, llm=llm)
