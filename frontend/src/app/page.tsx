@@ -1,69 +1,156 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const POLL_INTERVAL_MS = 2000;
+
+const TERMINAL_STATUSES = new Set([
+  "completed",
+  "completed_partial",
+  "completed_degraded",
+  "source_unavailable",
+  "rejected",
+  "failed",
+  "cancelled",
+]);
+
+const RESULTS_STATUSES = new Set([
+  "completed",
+  "completed_partial",
+  "completed_degraded",
+]);
+
+type ResearchStatusResponse = {
+  id: string;
+  status: string;
+  statistics: Record<string, number>;
+};
+
+type Result = {
+  entity_id: string;
+  entity_name: string;
+  supporter_count: number;
+  share: number;
+  respondent_pool_size: number;
+  discussion_count: number;
+  weighted_score: number;
+  confidence: number;
+};
+
+type ResearchResultsResponse = {
+  id: string;
+  status: string;
+  results: Result[];
+};
 
 export default function Home() {
+  const [query, setQuery] = useState("");
+  const [researchId, setResearchId] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [results, setResults] = useState<Result[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollHandle.current !== null) clearInterval(pollHandle.current);
+    };
+  }, []);
+
+  async function pollOnce(id: string) {
+    try {
+      const response = await fetch(`${API_URL}/api/research/${id}`);
+      if (!response.ok) throw new Error(`status check failed: ${response.status}`);
+      const current = (await response.json()) as ResearchStatusResponse;
+      setStatus(current.status);
+
+      if (!TERMINAL_STATUSES.has(current.status)) return;
+
+      if (pollHandle.current !== null) {
+        clearInterval(pollHandle.current);
+        pollHandle.current = null;
+      }
+
+      if (!RESULTS_STATUSES.has(current.status)) return;
+
+      const resultsResponse = await fetch(`${API_URL}/api/research/${id}/results`);
+      if (!resultsResponse.ok) throw new Error(`results fetch failed: ${resultsResponse.status}`);
+      const body = (await resultsResponse.json()) as ResearchResultsResponse;
+      setResults(body.results);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "something went wrong");
+    }
+  }
+
+  function startPolling(id: string) {
+    if (pollHandle.current !== null) clearInterval(pollHandle.current);
+    pollHandle.current = setInterval(() => {
+      void pollOnce(id);
+    }, POLL_INTERVAL_MS);
+  }
+
+  async function submitQuery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setResults(null);
+    setStatus(null);
+    setResearchId(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!response.ok) throw new Error(`request failed: ${response.status}`);
+      const created = (await response.json()) as ResearchStatusResponse;
+      setResearchId(created.id);
+      setStatus(created.status);
+      startPolling(created.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "something went wrong");
+    }
+  }
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main style={{ fontFamily: "sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
+      <h1>TripFinder</h1>
+
+      <form onSubmit={submitQuery}>
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="e.g. most underrated US states for nature"
+          style={{ width: "100%", padding: "0.5rem" }}
+          required
         />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        <button type="submit" style={{ marginTop: "0.5rem" }}>
+          Search
+        </button>
+      </form>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      {researchId && (
+        <p>
+          Research <code>{researchId}</code> — status: <strong>{status}</strong>
+        </p>
+      )}
+
+      {results && results.length > 0 && (
+        <ol>
+          {results.map((result) => (
+            <li key={result.entity_id}>
+              {result.entity_name} — {result.supporter_count} supporters (
+              {Math.round(result.share * 100)}% of {result.respondent_pool_size})
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {results && results.length === 0 && <p>No results.</p>}
+    </main>
   );
 }
