@@ -38,9 +38,16 @@ class TriageFloors(BaseModel):
     min_polling_document_ratio: float = Field(default=0.15, ge=0.0, le=1.0)
 
 
+class QueryUnderstandingConfig(BaseModel):
+    """Query Understanding thresholds (plan §2.4, §6)."""
+
+    granularity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
 class ResearchConfig(BaseModel):
     """The full configuration a research run persists (PROJECT.md §21)."""
 
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     source_health_floors: SourceHealthFloors = Field(default_factory=SourceHealthFloors)
     triage_floors: TriageFloors = Field(default_factory=TriageFloors)
+    query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
