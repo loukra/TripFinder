@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 from tripfinder.domain.models import Comment, SourceDocument
 from tripfinder.domain.ports import SourceSearchQuery
@@ -54,6 +55,20 @@ class ArcticShiftAdapter:
     async def health_check(self) -> bool:
         return await self._client.health_check()
 
+    def _map_post(self, raw: dict[str, Any]) -> SourceDocument | None:
+        try:
+            return post_to_document(raw, source=self.name)
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("arctic_shift: dropped malformed post %r: %s", raw.get("id"), exc)
+            return None
+
+    def _map_comment(self, raw: dict[str, Any], *, document_id: str) -> Comment | None:
+        try:
+            return comment_to_domain(raw, source_document_id=document_id)
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("arctic_shift: dropped malformed comment %r: %s", raw.get("id"), exc)
+            return None
+
     async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
         documents: list[SourceDocument] = []
         before: int | None = None
@@ -70,12 +85,9 @@ class ArcticShiftAdapter:
                 break
 
             for raw in raw_items:
-                try:
-                    documents.append(post_to_document(raw, source=self.name))
-                except (KeyError, TypeError, ValueError) as exc:
-                    logger.warning(
-                        "arctic_shift: dropped malformed post %r: %s", raw.get("id"), exc
-                    )
+                document = self._map_post(raw)
+                if document is not None:
+                    documents.append(document)
 
             before = raw_items[-1]["created_utc"]
             if len(raw_items) < page_limit:
@@ -86,10 +98,9 @@ class ArcticShiftAdapter:
     async def fetch_document(self, document_id: str) -> SourceDocument:
         body = await self._client.get("/api/posts/ids", params={"ids": document_id})
         for raw in body.get("data") or []:
-            try:
-                return post_to_document(raw, source=self.name)
-            except (KeyError, TypeError, ValueError) as exc:
-                logger.warning("arctic_shift: dropped malformed post %r: %s", raw.get("id"), exc)
+            document = self._map_post(raw)
+            if document is not None:
+                return document
         raise LookupError(f"ArcticShiftAdapter has no document {document_id!r}")
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
@@ -111,12 +122,9 @@ class ArcticShiftAdapter:
                 author = str(raw.get("author") or "[deleted]")
                 if is_bot_author(author, denylist=self._config.bot_denylist):
                     continue
-                try:
-                    comments.append(comment_to_domain(raw, source_document_id=document.id))
-                except (KeyError, TypeError, ValueError) as exc:
-                    logger.warning(
-                        "arctic_shift: dropped malformed comment %r: %s", raw.get("id"), exc
-                    )
+                comment = self._map_comment(raw, document_id=document.id)
+                if comment is not None:
+                    comments.append(comment)
 
             after = raw_items[-1]["created_utc"] + 1
             if len(raw_items) < self._config.page_size:
