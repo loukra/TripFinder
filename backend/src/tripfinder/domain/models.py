@@ -122,6 +122,41 @@ class Opinion(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class GeoScope(BaseModel):
+    """The geographic bound of a research question (plan §6), e.g. a country."""
+
+    type: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+
+
+class ResearchPlan(BaseModel):
+    """Query Understanding's confident outcome (plan §6): a research is ready to discover."""
+
+    normalized_query: str = Field(min_length=1)
+    scope: GeoScope
+    entity_granularity: EntityType
+    granularity_confidence: float = Field(ge=0.0, le=1.0)
+    topic: str = Field(min_length=1)
+    criteria: list[str] = Field(default_factory=list)
+    seed_queries: list[str] = Field(default_factory=list)
+    candidate_subreddits: list[str] = Field(default_factory=list)
+
+
+class ClarificationOption(BaseModel):
+    """One choice offered back to the user, mapped to a candidate granularity (plan §6)."""
+
+    label: str = Field(min_length=1)
+    entity_granularity: EntityType
+
+
+class ClarificationRequest(BaseModel):
+    """Query Understanding's ambiguous outcome (plan §2.4, §6): ask before guessing."""
+
+    question: str = Field(min_length=1)
+    options: list[ClarificationOption]
+    allow_grouped: bool = True
+
+
 class Result(BaseModel):
     """One ranked entity in a completed research (PROJECT.md §7, plan §4)."""
 
