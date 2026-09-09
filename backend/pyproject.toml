@@ -7,6 +7,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "asyncpg>=0.31.0",
+    "alembic>=1.19.2",
 ]
 
 [dependency-groups]
@@ -16,6 +19,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.7",
     "mypy>=1.13",
+    "testcontainers[postgres]>=4.15.0",
 ]
 
 [build-system]
@@ -44,3 +48,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "alembic.*"]
+ignore_missing_imports = true

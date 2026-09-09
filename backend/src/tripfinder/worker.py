@@ -1,12 +1,19 @@
-"""Worker process entrypoint. Phase 0: proves the process boots; no job logic yet."""
+"""Worker process entrypoint (plan §10 Phase 3). Polls the job table forever."""
 
-import time
+from __future__ import annotations
+
+import asyncio
+import os
+
+from tripfinder.jobs.worker_loop import run_worker_loop
+from tripfinder.persistence.database import DEFAULT_DATABASE_URL, make_engine, make_session_factory
 
 
 def main() -> None:
-    while True:
-        print("worker heartbeat")
-        time.sleep(5)
+    database_url = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+    engine = make_engine(database_url)
+    session_factory = make_session_factory(engine)
+    asyncio.run(run_worker_loop(session_factory))
 
 
 if __name__ == "__main__":
