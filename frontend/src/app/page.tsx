@@ -22,6 +22,11 @@ const RESULTS_STATUSES = new Set([
   "completed_degraded",
 ]);
 
+type ResearchCreateResponse = {
+  id: string;
+  status: string;
+};
+
 type ResearchStatusResponse = {
   id: string;
   status: string;
@@ -45,6 +50,12 @@ type ResearchResultsResponse = {
   results: Result[];
 };
 
+async function fetchJson<T>(url: string, errorLabel: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  if (!response.ok) throw new Error(`${errorLabel}: ${response.status}`);
+  return (await response.json()) as T;
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [researchId, setResearchId] = useState<string | null>(null);
@@ -61,9 +72,10 @@ export default function Home() {
 
   async function pollOnce(id: string) {
     try {
-      const response = await fetch(`${API_URL}/api/research/${id}`);
-      if (!response.ok) throw new Error(`status check failed: ${response.status}`);
-      const current = (await response.json()) as ResearchStatusResponse;
+      const current = await fetchJson<ResearchStatusResponse>(
+        `${API_URL}/api/research/${id}`,
+        "status check failed"
+      );
       setStatus(current.status);
 
       if (!TERMINAL_STATUSES.has(current.status)) return;
@@ -75,9 +87,10 @@ export default function Home() {
 
       if (!RESULTS_STATUSES.has(current.status)) return;
 
-      const resultsResponse = await fetch(`${API_URL}/api/research/${id}/results`);
-      if (!resultsResponse.ok) throw new Error(`results fetch failed: ${resultsResponse.status}`);
-      const body = (await resultsResponse.json()) as ResearchResultsResponse;
+      const body = await fetchJson<ResearchResultsResponse>(
+        `${API_URL}/api/research/${id}/results`,
+        "results fetch failed"
+      );
       setResults(body.results);
     } catch (err) {
       setError(err instanceof Error ? err.message : "something went wrong");
@@ -99,13 +112,15 @@ export default function Home() {
     setResearchId(null);
 
     try {
-      const response = await fetch(`${API_URL}/api/research`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
-      });
-      if (!response.ok) throw new Error(`request failed: ${response.status}`);
-      const created = (await response.json()) as ResearchStatusResponse;
+      const created = await fetchJson<ResearchCreateResponse>(
+        `${API_URL}/api/research`,
+        "request failed",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        }
+      );
       setResearchId(created.id);
       setStatus(created.status);
       startPolling(created.id);
