@@ -126,7 +126,7 @@ research **persists the budget it actually ran with** (`PROJECT.md` §21).
 
 ## 2. Corrections to PROJECT.md
 
-Six issues found in review. Each has a resolution that is binding on implementation.
+Issues found in review. Each has a resolution that is binding on implementation.
 
 ### 2.1 The headline percentage was undefined — **now specified in §4**
 
@@ -220,6 +220,22 @@ integration risk to the end and gives no feedback loop.
 
 **Resolution:** insert **Phase 3.5**, a thin API + minimal UI on the fake pipeline. Every
 subsequent phase then visibly improves a running product.
+
+### 2.9 The real LLM provider was never shipped — **Phase 7.5 added**
+
+§1 locks OpenAI behind the `LLMProvider` port and §3.1 reserves `ai/` for "openai, fake", but no
+phase in §10 ever shipped the OpenAI adapter, and no phase introduced the settings layer that would
+hold an API key. Every LLM-consuming phase (5, 6, 8, 9, 12) is fully satisfiable with
+`FakeLLMProvider`, so the plan stayed green to Phase 15 without a key ever being required. The
+composition root compounded it: `jobs/worker_loop.py` runs `build_fake_pipeline_runner()`, and no
+phase said to switch it.
+
+This is a §0.1 problem, not merely a missing task. A run whose LLM calls fail for want of a
+credential would otherwise produce an empty analysis — a failure wearing the face of a thin finding.
+
+**Resolution:** insert **Phase 7.5**, which ships the OpenAI adapter, the runtime settings layer,
+and provider selection defaulting to fake. **Phase 13** additionally ships the composition-root
+switch to the real pipeline.
 
 ---
 
@@ -675,7 +691,9 @@ Follows `PROJECT.md` §26. Concretely:
 | Frontend | Vitest + Playwright | Component + one E2E happy path |
 
 **`FakeLLMProvider`** returns fixture responses keyed by prompt hash — deterministic, offline, and
-able to simulate malformed output, refusals, and timeouts.
+able to simulate malformed output, refusals, and timeouts. It is the **default provider** —
+`LLM_PROVIDER` must be set explicitly to reach OpenAI (§10 Phase 7.5), so no test run can bill an
+account by accident.
 
 **Golden datasets** for `ranking/`: small hand-calculated fixtures where the expected supporter
 counts, shares, and order are known exactly and asserted to the decimal. `PROJECT.md` §27 Phase 11
@@ -701,12 +719,13 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | 5 | Query understanding | 1 | Plan extraction, granularity detection, **clarification loop**, rejection path |
 | 6 | Agentic discovery | 4, 5 | Source tool boundary, bounded agent loop, duplicate-query prevention |
 | 7 | **Triage** + retrieval + pre-filter | 4, 6 | **§4.7 Document Triage step**, bounded retrieval, dedup, heuristic pre-filter, budget enforcement, **§8.1 health accounting** |
+| **7.5** | **Real LLM provider** | 5 | **OpenAI adapter behind the port, runtime settings + `OPENAI_API_KEY`, provider selection defaulting to fake** |
 | 8 | Comment analysis | 5, 7 | The merged §5 call, quote verification, labeled fixture set |
 | 9 | Entity resolution | 8 | Deterministic normalization → alias table → AI only for ambiguity |
 | 10 | Opinion + dedup | 9 | Signed stance, one-user-one-entity rule, evidence retention |
 | 11 | Aggregation + ranking | 10 | §4 math, golden datasets, thresholds, partial results |
 | 12 | AI summaries | 11 | Evidence-grounded explanations, traceable to stored quotes |
-| 13 | API hardening | 3.5, 12 | Full endpoints, cancellation, error contract, OpenAPI |
+| 13 | API hardening | 3.5, 12 | Full endpoints, cancellation, error contract, OpenAPI, **composition root switched to the real pipeline** |
 | 14 | Frontend | 13 | Search, clarification, progress, results, evidence drill-down, empty states |
 | 15 | Evaluation | 14 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
@@ -753,6 +772,15 @@ to `topical` and are never promoted to `polling`. Triage verdicts and reasons ar
 exposed. A test asserts that excluding a topical thread removes its users from **both** the numerator
 and the respondent pool. **Triage runs before retrieval** — a test asserts no comment tree is fetched
 for an excluded document.
+
+**Phase 7.5 — acceptance:** the OpenAI adapter satisfies `LLMProvider` and is exercised against a
+stubbed client with **no network in the normal suite**; model IDs, timeouts, retries and token caps
+live in an `OpenAIConfig` following the `ArcticShiftConfig` pattern, never in `domain/`. Settings
+read `OPENAI_API_KEY` from the environment; `.env.example` documents it and the key is never logged
+or persisted. `LLM_PROVIDER` selects fake or openai and **defaults to fake**, so `make test` and CI
+stay offline. Two §0.1 tests: a missing or rejected credential fails the research with an explicit
+provider-failure reason and **no results object**, and it is distinguishable from a genuinely thin
+run. The import-boundary test still passes.
 
 **Phase 8 — acceptance:** a labeled fixture set covering clearly relevant, indirectly relevant,
 irrelevant, ambiguous, and differently-worded-but-equivalent comments. Semantic matches succeed
