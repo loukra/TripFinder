@@ -35,6 +35,8 @@ this procedure exactly. It is the same every time; only the number changes.
 
 **Before writing any code**
 
+0. `git checkout main && git pull`. If the previous phase's PR is merged or closed, delete its
+   branch, local and remote (`git branch -d <branch>`, `git push origin --delete <branch>`).
 1. Read the phase's row in plan §10 — its dependencies and its deliverables.
 2. Read its acceptance criteria, in the numbered notes below that table.
 3. Re-read plan §0.1 (standing principle), §3.1 (layout + import rule), §3.2 (commands),
@@ -56,7 +58,9 @@ this procedure exactly. It is the same every time; only the number changes.
   did not observe.
 - Walk each acceptance criterion and state explicitly how it is met.
 - Report using the plan §12 template.
-- **Then stop and wait.** Do not merge the branch, and do not begin the next phase.
+- **Push the branch and open a PR against `main`** (`git push -u origin <branch>` then
+  `gh pr create`). This happens automatically at the end of every phase — no need to ask.
+- **Then stop and wait.** Do not merge the PR, and do not begin the next phase.
 
 ## Non-negotiables
 
