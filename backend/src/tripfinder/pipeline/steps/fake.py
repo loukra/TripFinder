@@ -108,7 +108,7 @@ class FakeAggregationStep:
         for mention in mentions:
             supporters[mention.entity_name].add(mention.user_id)
 
-        pool_size = len({user for users in supporters.values() for user in users})
+        pool_size = len({mention.user_id for mention in mentions})
         discussion_count = len({comment.source_document_id for comment in comments})
 
         results = [
