@@ -10,9 +10,12 @@ acceptance: "a non-travel query is rejected without consuming budget").
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from tripfinder.analysis.query_understanding import (
     CLARIFICATION_QUESTION,
     DEFAULT_REJECTION_REASON,
+    EntityGranularityCandidate,
     QueryUnderstandingResponse,
     build_query_understanding_prompt,
     granularity_label,
@@ -20,11 +23,21 @@ from tripfinder.analysis.query_understanding import (
 from tripfinder.domain.models import (
     ClarificationOption,
     ClarificationRequest,
-    EntityType,
     ResearchPlan,
     ResearchStatus,
 )
 from tripfinder.pipeline.base import PipelineContext
+
+
+def _clarification_options(
+    candidates: Sequence[EntityGranularityCandidate],
+) -> list[ClarificationOption]:
+    """One option per distinct granularity, most-confident first (plan §6 example)."""
+    granularities = dict.fromkeys(candidate.entity_granularity for candidate in candidates)
+    return [
+        ClarificationOption(label=granularity_label(granularity), entity_granularity=granularity)
+        for granularity in granularities
+    ]
 
 
 class QueryUnderstandingStep:
@@ -49,20 +62,8 @@ class QueryUnderstandingStep:
         threshold = context.research.research_config.query_understanding.granularity_threshold
 
         if not candidates or candidates[0].confidence < threshold:
-            seen: set[EntityType] = set()
-            options: list[ClarificationOption] = []
-            for candidate in candidates:
-                if candidate.entity_granularity in seen:
-                    continue
-                seen.add(candidate.entity_granularity)
-                options.append(
-                    ClarificationOption(
-                        label=granularity_label(candidate.entity_granularity),
-                        entity_granularity=candidate.entity_granularity,
-                    )
-                )
             context.data["clarification_request"] = ClarificationRequest(
-                question=CLARIFICATION_QUESTION, options=options
+                question=CLARIFICATION_QUESTION, options=_clarification_options(candidates)
             )
             context.research.status = ResearchStatus.NEEDS_CLARIFICATION
             return context
