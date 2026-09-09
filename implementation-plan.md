@@ -63,10 +63,11 @@ amendment, not an implementation detail.
 
 | Area | Decision | Rationale |
 |---|---|---|
-| Backend | Python 3.12, FastAPI, Pydantic v2 | Strongest ecosystem for the analysis/eval work; Pydantic gives the validated structured output `PROJECT.md` demands throughout |
+| Backend | **Python 3.12.14** (pinned in `.python-version`), FastAPI, Pydantic v2 | Strongest ecosystem for the analysis/eval work; Pydantic gives the validated structured output `PROJECT.md` demands throughout |
 | Frontend | Next.js (App Router), React, TypeScript | Results page needs charts, polling, progress state |
 | Database | PostgreSQL 16 | Snapshot persistence with JSONB for pipeline payloads |
 | ORM / migrations | SQLAlchemy 2.x + Alembic | |
+| Python toolchain | **uv** — Python version, venvs, dependencies | One tool replacing pyenv + pip + venv. Installed; 3.12.14 pinned |
 | Job queue | **Postgres-backed job table + polling worker. No Redis.** | One less service; local-first; `PROJECT.md` §29 "prefer simple solutions" |
 | LLM provider | **OpenAI**, behind an `LLMProvider` port | User decision. Port keeps §13's replaceability |
 | Default model | `gpt-5-mini` for analysis, larger tier for query understanding + summaries | ~$0.15/research at balanced budget |

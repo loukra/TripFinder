@@ -43,10 +43,19 @@ Read both before starting work. `implementation-plan.md` §0 states the preceden
 
 ## Stack
 
-Python 3.12 · FastAPI · Pydantic v2 · SQLAlchemy 2 + Alembic · PostgreSQL 16 · OpenAI behind an
+Python 3.12.14 (via `uv`, pinned in `.python-version`) · FastAPI · Pydantic v2 · SQLAlchemy 2 + Alembic · PostgreSQL 16 · OpenAI behind an
 `LLMProvider` port · Next.js + TypeScript frontend · pytest / Vitest / Playwright · ruff + mypy
 (strict).
 
 ## Commands
 
 Populated during Phase 0. Expected: `make test`, `make lint`, `make typecheck`, `docker compose up`.
+
+Use `uv` for all Python work (`uv sync`, `uv run pytest`) — never bare `pip`, `python`, or `python3`.
+
+**Expected, not a bug:** this machine has pyenv installed, and pyenv also reads `.python-version`.
+Because 3.12.14 is managed by uv rather than pyenv, any bare `python3` call in this repo fails with
+`pyenv: version '3.12.14' is not installed`. That is the correct outcome — it fails loudly instead of
+silently building against the system Python 3.9.8. Do not "fix" it by editing `.python-version`,
+installing pyenv Pythons, or lowering the required version. Route every command through `uv run`, and
+make the Makefile do the same.
