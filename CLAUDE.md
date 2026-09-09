@@ -51,11 +51,27 @@ Python 3.12.14 (via `uv`, pinned in `.python-version`) · FastAPI · Pydantic v2
 
 Populated during Phase 0. Expected: `make test`, `make lint`, `make typecheck`, `docker compose up`.
 
-Use `uv` for all Python work (`uv sync`, `uv run pytest`) — never bare `pip`, `python`, or `python3`.
+Use `uv` for all Python work — `uv sync` to install, `uv run pytest` to run. It owns the
+interpreter, the venv, and the lockfile.
 
-**Expected, not a bug:** this machine has pyenv installed, and pyenv also reads `.python-version`.
-Because 3.12.14 is managed by uv rather than pyenv, any bare `python3` call in this repo fails with
-`pyenv: version '3.12.14' is not installed`. That is the correct outcome — it fails loudly instead of
-silently building against the system Python 3.9.8. Do not "fix" it by editing `.python-version`,
-installing pyenv Pythons, or lowering the required version. Route every command through `uv run`, and
-make the Makefile do the same.
+**Python setup (already done, don't re-derive it).** Python 3.12.14 is installed and managed by
+**uv**, and pinned in `.python-version`. This machine also has **pyenv**, which reads the same file,
+so uv's interpreter is symlinked into pyenv's version directory:
+
+```
+~/.pyenv/versions/3.12.14 -> ~/.local/share/uv/python/cpython-3.12-macos-aarch64-none
+```
+
+Both tools therefore resolve the same interpreter, and `python`, `python3`, `pip`, and `uv run` all
+give 3.12.14 inside this repo while other projects keep their own versions. There is one copy of
+Python, not two.
+
+If `python3` ever reports `pyenv: version '3.12.14' is not installed`, the symlink has gone stale
+(usually because uv upgraded its managed Python). Recreate it:
+
+```bash
+ln -sfn "$(dirname "$(dirname "$(uv python find 3.12)")")" ~/.pyenv/versions/3.12.14 && pyenv rehash
+```
+
+Do not respond to that error by editing `.python-version`, lowering the required version, or
+installing a second Python through pyenv.
