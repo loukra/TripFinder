@@ -28,6 +28,36 @@ Read both before starting work. `implementation-plan.md` §0 states the preceden
 4. If the plan looks wrong while implementing it, say so and propose an amendment.
    Do not deviate silently.
 
+## Starting a phase
+
+When asked to implement a phase — `/phase 4`, "Phase 4", or "implement the next phase" — follow
+this procedure exactly. It is the same every time; only the number changes.
+
+**Before writing any code**
+
+1. Read the phase's row in plan §10 — its dependencies and its deliverables.
+2. Read its acceptance criteria, in the numbered notes below that table.
+3. Re-read plan §0.1 (standing principle), §3.1 (layout + import rule), §3.2 (commands),
+   §4.6 (pipeline order).
+4. If the phase includes an AI step, also read §5 (analysis contract) and §4.7 (triage).
+5. Confirm every phase it depends on is merged. If one is not, say so and stop.
+
+**While building**
+
+- Work on a branch named `phase-<n>-<short-slug>`.
+- Smallest useful increment, with tests alongside it (`PROJECT.md` §26).
+- **Never** scaffold, stub, or "prepare for" a later phase.
+- All Python through `uv run`.
+- If the plan looks wrong, stop and propose an amendment. Do not deviate silently.
+
+**Before reporting**
+
+- Run `make lint`, `make typecheck`, `make test`. Paste the real output — never assert a pass you
+  did not observe.
+- Walk each acceptance criterion and state explicitly how it is met.
+- Report using the plan §12 template.
+- **Then stop and wait.** Do not merge the branch, and do not begin the next phase.
+
 ## Non-negotiables
 
 - **Plan §0.1** — a failure must never masquerade as a finding. Any step that can drop, exclude, or
