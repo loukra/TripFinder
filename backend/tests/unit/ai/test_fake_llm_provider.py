@@ -43,3 +43,27 @@ async def test_ignores_prompt_content_deterministic_regardless_of_input() -> Non
     )
 
     assert first == second == _Widget(count=7)
+
+
+async def test_queued_responses_are_drained_one_per_call_in_order() -> None:
+    provider = FakeLLMProvider({_Widget: [_Widget(count=1), _Widget(count=2)]})
+
+    first = await provider.complete_structured(prompt="a", response_model=_Widget)
+    second = await provider.complete_structured(prompt="b", response_model=_Widget)
+
+    assert (first, second) == (_Widget(count=1), _Widget(count=2))
+
+
+async def test_exhausted_queue_raises_rather_than_repeating() -> None:
+    provider = FakeLLMProvider({_Widget: [_Widget(count=1)]})
+    await provider.complete_structured(prompt="a", response_model=_Widget)
+
+    with pytest.raises(LookupError):
+        await provider.complete_structured(prompt="b", response_model=_Widget)
+
+
+async def test_queued_response_of_the_wrong_type_raises() -> None:
+    provider = FakeLLMProvider({_Widget: [_Gadget(label="oops")]})
+
+    with pytest.raises(TypeError):
+        await provider.complete_structured(prompt="a", response_model=_Widget)
