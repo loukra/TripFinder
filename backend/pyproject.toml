@@ -12,6 +12,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "ruff>=0.7",
     "mypy>=1.13",
@@ -27,6 +28,7 @@ packages = ["src/tripfinder"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
 markers = [
     "evaluation: real-LLM evaluation tests, excluded from normal test runs",
 ]
