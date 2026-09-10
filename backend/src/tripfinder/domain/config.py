@@ -55,6 +55,18 @@ class PrefilterConfig(BaseModel):
     min_comment_characters: int = Field(default=40, ge=0)
 
 
+class EntityResolutionConfig(BaseModel):
+    """Entity resolution thresholds (plan §4.6 step 8, `PROJECT.md` §15).
+
+    ``confidence_threshold`` is the floor below which a model-proposed
+    canonical name is **not** acted on. `PROJECT.md` §15's "never silently
+    merge entities when confidence is too low" is this number plus the
+    diagnostics that make the refusal visible.
+    """
+
+    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
 class ResearchConfig(BaseModel):
     """The full configuration a research run persists (PROJECT.md §21)."""
 
@@ -63,3 +75,4 @@ class ResearchConfig(BaseModel):
     triage_floors: TriageFloors = Field(default_factory=TriageFloors)
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
+    entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)

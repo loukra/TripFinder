@@ -13,6 +13,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tripfinder.domain.models import (
+    EntityResolutionMethod,
+    EntityResolutionOutcome,
+    EntityType,
     Research,
     ResearchFlag,
     ResearchStatus,
@@ -279,3 +282,42 @@ class TestDiagnosticsAreExposed:
 
         assert diagnostics["suppressions"][0]["count"] == 40
         assert diagnostics["suppressions"][0]["detail"] == "leading title naming the entity"
+
+    async def test_a_name_the_run_could_not_place_reaches_the_caller(
+        self,
+        client: TestClient,
+        session_factory: async_sessionmaker[AsyncSession],
+        make_research: Callable[..., Research],
+    ) -> None:
+        """Plan §0.1 rule 2 for §4.6 step 8 — an unmerged name is visible, not logged.
+
+        Without this the two runs are indistinguishable: a state nobody
+        mentioned and a state mentioned forty times under a name we could
+        not resolve both contribute nothing to the ranking.
+        """
+        research = make_research()
+        research.status = ResearchStatus.COMPLETED
+        research.diagnostics.entity_resolutions = [
+            EntityResolutionOutcome(
+                surface_form="that one state",
+                entity_type=EntityType.STATE,
+                occurrences=40,
+                decided_by=EntityResolutionMethod.AI,
+                confidence=0.2,
+                reason="the quote does not say which state is meant",
+            )
+        ]
+        research.diagnostics.record_suppression(
+            step="entity_resolution",
+            reason=SuppressionReason.ENTITY_UNRESOLVED,
+            count=40,
+            detail="that one state: the quote does not say which state is meant",
+        )
+        await _persist(session_factory, research)
+
+        diagnostics = client.get(f"/api/research/{research.id}").json()["diagnostics"]
+
+        (unplaced,) = diagnostics["entity_resolutions"]
+        assert (unplaced["surface_form"], unplaced["occurrences"]) == ("that one state", 40)
+        assert unplaced["entity_id"] is None
+        assert diagnostics["suppressions"][0]["reason"] == "entity_unresolved"
