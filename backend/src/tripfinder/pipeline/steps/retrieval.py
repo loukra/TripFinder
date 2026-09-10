@@ -56,33 +56,32 @@ class ContentRetrievalStep:
         documents_unvisited = 0
 
         # Polling first, always: topical threads spend only leftover budget.
-        for documents, sink in (
-            (polling_documents, polling_comments),
-            (topical_documents, topical_comments),
-        ):
-            for index, document in enumerate(documents):
-                if len(seen_comment_ids) >= max_comments:
-                    documents_unvisited += len(documents) - index
-                    break
+        queue = [(document, polling_comments) for document in polling_documents]
+        queue += [(document, topical_comments) for document in topical_documents]
 
-                fetched = await self._fetch(context, document, recorder=recorder)
-                if fetched is None:
+        for index, (document, sink) in enumerate(queue):
+            if len(seen_comment_ids) >= max_comments:
+                documents_unvisited = len(queue) - index
+                break
+
+            fetched = await self._fetch(context, document, recorder=recorder)
+            if fetched is None:
+                continue
+            documents_retrieved += 1
+
+            for comment in fetched:
+                if comment.id in seen_comment_ids:
+                    diagnostics.record_suppression(
+                        step=self.name,
+                        reason=SuppressionReason.DUPLICATE_COMMENT,
+                        count=1,
+                    )
                     continue
-                documents_retrieved += 1
-
-                for comment in fetched:
-                    if comment.id in seen_comment_ids:
-                        diagnostics.record_suppression(
-                            step=self.name,
-                            reason=SuppressionReason.DUPLICATE_COMMENT,
-                            count=1,
-                        )
-                        continue
-                    if len(seen_comment_ids) >= max_comments:
-                        comments_dropped_for_budget += 1
-                        continue
-                    seen_comment_ids.add(comment.id)
-                    sink.append(comment)
+                if len(seen_comment_ids) >= max_comments:
+                    comments_dropped_for_budget += 1
+                    continue
+                seen_comment_ids.add(comment.id)
+                sink.append(comment)
 
         # Two different units, so two entries: a suppression's count must
         # mean one thing.

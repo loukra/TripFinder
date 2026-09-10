@@ -44,21 +44,21 @@ class SourceHealthRecorder:
 
     def snapshot(self) -> list[SourceHealth]:
         """The per-adapter accounting, adapter name ascending."""
-        return [
-            SourceHealth(
-                adapter=adapter,
-                calls_attempted=self._attempted[adapter],
-                calls_succeeded=self._succeeded[adapter],
-                calls_failed=self._attempted[adapter] - self._succeeded[adapter],
-                failure_kinds=dict(self._failure_kinds.get(adapter, {})),
-                success_rate=(
-                    self._succeeded[adapter] / self._attempted[adapter]
-                    if self._attempted[adapter]
-                    else 0.0
-                ),
+        health: list[SourceHealth] = []
+        for adapter in sorted(self._attempted):
+            attempted = self._attempted[adapter]
+            succeeded = self._succeeded[adapter]
+            health.append(
+                SourceHealth(
+                    adapter=adapter,
+                    calls_attempted=attempted,
+                    calls_succeeded=succeeded,
+                    calls_failed=attempted - succeeded,
+                    failure_kinds=dict(self._failure_kinds.get(adapter, {})),
+                    success_rate=succeeded / attempted if attempted else 0.0,
+                )
             )
-            for adapter in sorted(self._attempted)
-        ]
+        return health
 
 
 def get_recorder(context: PipelineContext) -> SourceHealthRecorder:

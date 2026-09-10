@@ -221,8 +221,6 @@ class SuppressionReason(StrEnum):
     from "there was nothing to find".
     """
 
-    TRIAGE_TOO_FEW_COMMENTS = "triage_too_few_comments"
-    TRIAGE_TOO_OLD = "triage_too_old"
     TRIAGE_EXCLUDED = "triage_excluded"
     TRIAGE_NOT_POLLING = "triage_not_polling"
     TRIAGE_NO_VERDICT = "triage_no_verdict"
