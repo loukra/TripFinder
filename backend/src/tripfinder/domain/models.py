@@ -277,6 +277,7 @@ class SuppressionReason(StrEnum):
     ENTITY_UNRESOLVED = "entity_unresolved"
     ENTITY_OFF_GRANULARITY = "entity_off_granularity"
     ENTITY_RESOLUTION_NO_RESULT = "entity_resolution_no_result"
+    AGGREGATION_BELOW_RELEVANCE_THRESHOLD = "aggregation_below_relevance_threshold"
 
 
 class Suppression(BaseModel):
@@ -400,6 +401,13 @@ class Research(BaseModel):
     research_config: ResearchConfig = Field(default_factory=ResearchConfig)
     statistics: dict[str, int] = Field(default_factory=dict)
     results: list[Result] = Field(default_factory=list)
+    """Strong recommendations only — ``supporterCount >= minimumIndependentUsers``,
+    capped at ``maxStrongResults`` (plan §4.4). Never padded."""
+    weak_results: list[Result] = Field(default_factory=list)
+    """Everything ranked but not shown as a headline result: below the
+    independent-user threshold, or beyond the strong-results cap. Persisted
+    rather than discarded (plan §4.4 "may appear in a separate weaker
+    signals section") — nothing computed here is silently dropped."""
     diagnostics: ResearchDiagnostics = Field(default_factory=ResearchDiagnostics)
 
 

@@ -1,8 +1,8 @@
 """SQLAlchemy table definitions (plan §3.1, §10 Phase 3).
 
 Two tables: ``research`` persists the domain ``Research`` aggregate as a
-whole (config/status/statistics/results/diagnostics as JSONB); ``research_jobs`` is the
-Postgres-backed work queue (plan §1 — no Redis).
+whole (config/status/statistics/results/weak_results/diagnostics as JSONB);
+``research_jobs`` is the Postgres-backed work queue (plan §1 — no Redis).
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ class ResearchRow(Base):
     research_config: Mapped[dict[str, Any]] = mapped_column(JSONB)
     statistics: Mapped[dict[str, Any]] = mapped_column(JSONB)
     results: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    weak_results: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     diagnostics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
 

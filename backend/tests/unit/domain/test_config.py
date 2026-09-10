@@ -3,6 +3,8 @@ from pydantic import ValidationError
 
 from tripfinder.domain.config import (
     EntityResolutionConfig,
+    RankingConfig,
+    RankingKey,
     ResearchBudget,
     ResearchConfig,
     SourceHealthFloors,
@@ -44,6 +46,16 @@ def test_entity_resolution_defaults_never_merge_below_high_confidence() -> None:
     assert EntityResolutionConfig().confidence_threshold == 0.7
 
 
+def test_ranking_config_defaults_match_plan() -> None:
+    config = RankingConfig()
+
+    assert config.decay_per_year == 0.10
+    assert config.min_weight == 0.3
+    assert config.ranking_key is RankingKey.SUPPORTER_COUNT
+    assert config.minimum_independent_users == 5
+    assert config.max_strong_results == 5
+
+
 def test_research_config_composes_all_defaults() -> None:
     config = ResearchConfig()
 
@@ -51,6 +63,7 @@ def test_research_config_composes_all_defaults() -> None:
     assert config.source_health_floors == SourceHealthFloors()
     assert config.triage_floors == TriageFloors()
     assert config.entity_resolution == EntityResolutionConfig()
+    assert config.ranking == RankingConfig()
 
 
 def test_research_config_round_trips_through_serialization() -> None:
@@ -88,3 +101,13 @@ def test_entity_resolution_rejects_a_threshold_above_one() -> None:
     """A threshold nothing can clear would silently resolve nothing at all."""
     with pytest.raises(ValidationError):
         EntityResolutionConfig.model_validate({"confidence_threshold": 1.5})
+
+
+def test_ranking_config_rejects_a_relevance_threshold_above_one() -> None:
+    with pytest.raises(ValidationError):
+        RankingConfig.model_validate({"relevance_threshold": 1.5})
+
+
+def test_ranking_config_rejects_a_non_positive_strong_results_cap() -> None:
+    with pytest.raises(ValidationError):
+        RankingConfig.model_validate({"max_strong_results": 0})
