@@ -1,0 +1,151 @@
+{
+  "query": "Most underrated US states for nature",
+  "comments": [
+    {
+      "id": "c-clear-1",
+      "label": "clearly_relevant",
+      "user_id": "u1",
+      "body": "Michigan is hands down the most underrated state for nature. The Upper Peninsula has waterfalls, dark skies and 1600 km of Great Lakes shoreline, and almost nobody outside the Midwest ever goes.",
+      "quote": "Michigan is hands down the most underrated state for nature",
+      "raw_text": "Michigan",
+      "entity": "Michigan",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Michigan"
+      ]
+    },
+    {
+      "id": "c-clear-2",
+      "label": "clearly_relevant",
+      "user_id": "u2",
+      "body": "West Virginia deserves far more credit than it gets. The New River Gorge is spectacular, the Monongahela is empty on weekdays, and nobody I know has ever thought to go there.",
+      "quote": "West Virginia deserves far more credit than it gets",
+      "raw_text": "West Virginia",
+      "entity": "West Virginia",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "West Virginia"
+      ]
+    },
+    {
+      "id": "c-indirect-1",
+      "label": "indirectly_relevant",
+      "user_id": "u3",
+      "body": "I moved to Idaho for work and ended up hiking every single weekend. The Sawtooths are as good as anything in Colorado and I have shared a trailhead with maybe four cars all summer.",
+      "quote": "The Sawtooths are as good as anything in Colorado",
+      "raw_text": "Idaho",
+      "entity": "Idaho",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Idaho"
+      ]
+    },
+    {
+      "id": "c-indirect-2",
+      "label": "indirectly_relevant",
+      "user_id": "u4",
+      "body": "Everyone flies into Las Vegas, drives straight to Utah for the parks and never looks sideways. Which is a shame, because the Great Basin is right there and you will have it to yourself.",
+      "quote": "the Great Basin is right there and you will have it to yourself",
+      "raw_text": "Great Basin",
+      "entity": "Nevada",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Nevada"
+      ]
+    },
+    {
+      "id": "c-irrelevant-1",
+      "label": "irrelevant",
+      "user_id": "u5",
+      "body": "Does anyone know if the campground reservation system is down? I have been trying to book since Tuesday and the page just spins forever.",
+      "quote": null,
+      "raw_text": null,
+      "entity": null,
+      "entity_type": null,
+      "expect_relevant": false,
+      "expect_positive": false,
+      "expect_entities": []
+    },
+    {
+      "id": "c-irrelevant-2",
+      "label": "irrelevant",
+      "user_id": "u6",
+      "body": "This thread is exactly why I stopped reading this sub. Same five answers every single time, and half of them are just people arguing about the question itself.",
+      "quote": null,
+      "raw_text": null,
+      "entity": null,
+      "entity_type": null,
+      "expect_relevant": false,
+      "expect_positive": false,
+      "expect_entities": []
+    },
+    {
+      "id": "c-ambiguous-1",
+      "label": "ambiguous",
+      "user_id": "u7",
+      "body": "Alaska is genuinely incredible and I would still not tell anyone to go. Between the cost of getting around and the bugs in July, most people I have sent there came back miserable.",
+      "quote": "Alaska is genuinely incredible and I would still not tell anyone to go",
+      "raw_text": "Alaska",
+      "entity": "Alaska",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": false,
+      "expect_entities": [
+        "Alaska"
+      ]
+    },
+    {
+      "id": "c-ambiguous-2",
+      "label": "ambiguous",
+      "user_id": "u8",
+      "body": "Georgia is wildly underrated for nature. The mountains in the north are gorgeous in October and the trails are quiet compared to anywhere else I have hiked.",
+      "quote": "Georgia is wildly underrated for nature",
+      "raw_text": "Georgia",
+      "entity": "Georgia",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Georgia"
+      ]
+    },
+    {
+      "id": "c-equivalent-1",
+      "label": "equivalent_wording",
+      "user_id": "u9",
+      "body": "If you want empty trails and big scenery, go to the Beaver State. People fly over it on their way to California and have no idea what is down there.",
+      "quote": "If you want empty trails and big scenery, go to the Beaver State",
+      "raw_text": "Beaver State",
+      "entity": "Oregon",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Oregon"
+      ]
+    },
+    {
+      "id": "c-equivalent-2",
+      "label": "equivalent_wording",
+      "user_id": "u10",
+      "body": "Spent a week sleeping under the stars in the Green Mountain State and saw maybe four other hikers the whole time. Nobody ever puts it on these lists.",
+      "quote": "Spent a week sleeping under the stars in the Green Mountain State",
+      "raw_text": "Green Mountain State",
+      "entity": "Vermont",
+      "entity_type": "state",
+      "expect_relevant": true,
+      "expect_positive": true,
+      "expect_entities": [
+        "Vermont"
+      ]
+    }
+  ]
+}
