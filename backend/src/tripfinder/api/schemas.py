@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from tripfinder.domain.models import (
     ResearchDiagnostics,
+    ResearchFailure,
     ResearchStatus,
     Result,
     SourceHealth,
@@ -85,3 +86,16 @@ class SourceUnavailableError(BaseModel):
     status: ResearchStatus
     message: str
     adapters: list[SourceHealth]
+
+
+class ResearchFailedError(BaseModel):
+    """A failed run's machine-readable error — the §8.1 rule 1 shape, for §0.1 rule 3.
+
+    ``failure`` is what separates this from a thin result: it names the
+    thing that went wrong instead of leaving an empty list to imply that
+    nobody had an opinion.
+    """
+
+    status: ResearchStatus
+    message: str
+    failure: ResearchFailure | None

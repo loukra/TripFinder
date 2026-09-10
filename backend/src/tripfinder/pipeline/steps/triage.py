@@ -77,6 +77,24 @@ def _batched(
         yield documents[start : start + size]
 
 
+def _rule(
+    document: SourceDocument,
+    verdict: TriageVerdict,
+    reason: str,
+    *,
+    criterion_match: bool = True,
+) -> TriageDecision:
+    """A decision a deterministic pre-check made — certain, and never the model's."""
+    return TriageDecision(
+        document_id=document.id,
+        verdict=verdict,
+        reason=reason,
+        confidence=1.0,
+        decided_by=TriageDecidedBy.RULE,
+        criterion_match=criterion_match,
+    )
+
+
 class DocumentTriageStep:
     """Real implementation of plan §4.6 step 4."""
 
@@ -142,28 +160,20 @@ class DocumentTriageStep:
     ) -> TriageDecision | None:
         """The deterministic checks, cheapest first. ``None`` means "ask the model"."""
         if document.comment_count < floors.min_comments_per_document:
-            return TriageDecision(
-                document_id=document.id,
-                verdict=TriageVerdict.EXCLUDE,
-                reason=(
-                    f"only {document.comment_count} comments, below the floor of "
-                    f"{floors.min_comments_per_document}"
-                ),
-                confidence=1.0,
-                decided_by=TriageDecidedBy.RULE,
+            return _rule(
+                document,
+                TriageVerdict.EXCLUDE,
+                f"only {document.comment_count} comments, below the floor of "
+                f"{floors.min_comments_per_document}",
             )
 
         age_years = (now - document.created_at).days / 365.25
         if age_years > floors.max_document_age_years:
-            return TriageDecision(
-                document_id=document.id,
-                verdict=TriageVerdict.EXCLUDE,
-                reason=(
-                    f"posted {age_years:.0f} years ago, beyond the "
-                    f"{floors.max_document_age_years}-year limit"
-                ),
-                confidence=1.0,
-                decided_by=TriageDecidedBy.RULE,
+            return _rule(
+                document,
+                TriageVerdict.EXCLUDE,
+                f"posted {age_years:.0f} years ago, beyond the "
+                f"{floors.max_document_age_years}-year limit",
             )
 
         # A table with no aliases at this tier cannot tell "names no entity"
@@ -174,22 +184,18 @@ class DocumentTriageStep:
 
         named = self._aliases.find(document.title, plan.entity_granularity)
         if named is not None:
-            return TriageDecision(
-                document_id=document.id,
-                verdict=TriageVerdict.TOPICAL,
-                reason=f"title names {named} at the target granularity, so it leads the answer",
-                confidence=1.0,
-                decided_by=TriageDecidedBy.RULE,
+            return _rule(
+                document,
+                TriageVerdict.TOPICAL,
+                f"title names {named} at the target granularity, so it leads the answer",
                 criterion_match=False,
             )
 
         if _is_interrogative(document.title):
-            return TriageDecision(
-                document_id=document.id,
-                verdict=TriageVerdict.POLLING,
-                reason="an open question naming no entity at the target granularity",
-                confidence=1.0,
-                decided_by=TriageDecidedBy.RULE,
+            return _rule(
+                document,
+                TriageVerdict.POLLING,
+                "an open question naming no entity at the target granularity",
             )
 
         return None
@@ -279,13 +285,9 @@ class DocumentTriageStep:
 def _downgrade_only(item: DocumentTriage, floors: TriageFloors) -> TriageDecision:
     """Turn one AI classification into a decision, downgrading where §4.7 requires it.
 
-    Three overrides, all one-directional:
-
-    * ``polling`` requires ``scope_match and granularity_match``;
-    * a thread failing ``criterion_match`` is downgraded rather than
-      excluded — it still holds real opinions, they just do not answer
-      *this* question (plan §4.7);
-    * anything below ``triageConfidenceThreshold`` becomes ``topical``.
+    Two one-directional overrides: anything below
+    ``triageConfidenceThreshold`` becomes ``topical``, and so does a
+    ``polling`` verdict with a ``_polling_blocker``.
 
     An ``exclude`` verdict below the threshold lands on ``topical`` too.
     That keeps a thread the model was unsure about as evidence while still
@@ -294,22 +296,20 @@ def _downgrade_only(item: DocumentTriage, floors: TriageFloors) -> TriageDecisio
     """
     verdict = item.verdict
     reason = item.reason
-    low_confidence = item.confidence < floors.triage_confidence_threshold
+    unsure = (
+        item.confidence < floors.triage_confidence_threshold
+        and item.verdict is not TriageVerdict.TOPICAL
+    )
+    blocker = _polling_blocker(item)
 
-    if low_confidence and verdict is not TriageVerdict.TOPICAL:
+    if unsure:
         reason = (
             f"{reason} (confidence {item.confidence:.2f} below "
             f"{floors.triage_confidence_threshold:.2f}; downgraded to topical)"
         )
         verdict = TriageVerdict.TOPICAL
-    elif verdict is TriageVerdict.POLLING and not (
-        item.scope_match and item.granularity_match
-    ):
-        missing = "scope" if not item.scope_match else "granularity"
-        reason = f"{reason} (downgraded to topical: {missing} mismatch)"
-        verdict = TriageVerdict.TOPICAL
-    elif verdict is TriageVerdict.POLLING and not item.criterion_match:
-        reason = f"{reason} (downgraded to topical: does not reflect the research criteria)"
+    elif blocker is not None:
+        reason = f"{reason} (downgraded to topical: {blocker})"
         verdict = TriageVerdict.TOPICAL
 
     return TriageDecision(
@@ -321,5 +321,27 @@ def _downgrade_only(item: DocumentTriage, floors: TriageFloors) -> TriageDecisio
         scope_match=item.scope_match,
         granularity_match=item.granularity_match,
         criterion_match=item.criterion_match,
-        downgraded_for_low_confidence=low_confidence and item.verdict is not TriageVerdict.TOPICAL,
+        downgraded_for_low_confidence=unsure,
     )
+
+
+def _polling_blocker(item: DocumentTriage) -> str | None:
+    """Why this classification may not stand as ``polling``.
+
+    ``None`` when nothing disqualifies it, and when it never claimed
+    ``polling`` in the first place.
+
+    ``polling`` requires ``scope_match and granularity_match`` (plan §4.7);
+    a criterion mismatch is the third disqualifier, and it downgrades rather
+    than excludes — the thread still holds real opinions, they just do not
+    answer *this* question.
+    """
+    if item.verdict is not TriageVerdict.POLLING:
+        return None
+    if not item.scope_match:
+        return "scope mismatch"
+    if not item.granularity_match:
+        return "granularity mismatch"
+    if not item.criterion_match:
+        return "does not reflect the research criteria"
+    return None

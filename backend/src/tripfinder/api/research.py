@@ -5,10 +5,12 @@ its results once complete. The full contract (clarify, evidence, cancel) is
 plan §11 / Phase 13 — later phases add it as the pipeline steps it depends on
 land.
 
-Two §8.1 obligations are enforced at this boundary rather than left to the
+Three obligations are enforced at this boundary rather than left to the
 frontend, because they are promises about what a number means: a
-``source_unavailable`` research has no results object at all, and a
-``completed_degraded`` one has no percentages.
+``source_unavailable`` research has no results object at all (§8.1 rule 1),
+a ``completed_degraded`` one has no percentages (§8.1 rule 2), and a
+``failed`` one has no results object either but does name its cause
+(§7.1, plan §0.1 rule 3).
 """
 
 from __future__ import annotations
@@ -21,10 +23,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.api.dependencies import get_session
-from tripfinder.api.messages import percentages_suppressed, status_message
+from tripfinder.api.messages import percentages_suppressed, research_message
 from tripfinder.api.schemas import (
     ResearchCreateRequest,
     ResearchCreateResponse,
+    ResearchFailedError,
     ResearchResultsResponse,
     ResearchStatusResponse,
     ResultItem,
@@ -59,7 +62,7 @@ async def get_research(research_id: UUID, session: SessionDep) -> ResearchStatus
     return ResearchStatusResponse(
         id=research.id,
         status=research.status,
-        message=status_message(research.status),
+        message=research_message(research.status, research.diagnostics.failure),
         statistics=research.statistics,
         diagnostics=research.diagnostics,
     )
@@ -77,8 +80,20 @@ async def get_research_results(
             status_code=409,
             detail=SourceUnavailableError(
                 status=research.status,
-                message=status_message(research.status),
+                message=research_message(research.status, research.diagnostics.failure),
                 adapters=research.diagnostics.source_health,
+            ).model_dump(mode="json"),
+        )
+
+    if research.status is ResearchStatus.FAILED:
+        # §7.1: a failed run has no results page. Plan §0.1 rule 3 adds the
+        # reason, so the caller can tell a broken run from a quiet one.
+        raise HTTPException(
+            status_code=409,
+            detail=ResearchFailedError(
+                status=research.status,
+                message=research_message(research.status, research.diagnostics.failure),
+                failure=research.diagnostics.failure,
             ).model_dump(mode="json"),
         )
 
@@ -86,7 +101,7 @@ async def get_research_results(
     return ResearchResultsResponse(
         id=research.id,
         status=research.status,
-        message=status_message(research.status),
+        message=research_message(research.status, research.diagnostics.failure),
         percentages_suppressed=suppress_share,
         results=[
             ResultItem.from_domain(result, suppress_share=suppress_share)

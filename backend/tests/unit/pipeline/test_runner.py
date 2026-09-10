@@ -2,8 +2,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tripfinder.ai.errors import (
+    LLMCredentialError,
+    LLMProviderError,
+    LLMResponseError,
+    LLMUnavailableError,
+)
 from tripfinder.ai.fake import FakeLLMProvider
-from tripfinder.domain.models import Research, ResearchStatus
+from tripfinder.domain.models import FailureKind, Research, ResearchStatus, Result
 from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEvent
 from tripfinder.pipeline.runner import PipelineRunner
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
@@ -132,3 +138,104 @@ async def test_a_non_halting_status_lets_the_pipeline_continue() -> None:
     await runner.run(_context())
 
     assert later.ran is True
+
+
+class _RaisingProviderStep:
+    """A step whose LLM call fails, the way every AI step's can."""
+
+    name = "asks_the_model"
+
+    def __init__(self, error: LLMProviderError) -> None:
+        self._error = error
+
+    async def run(self, context: PipelineContext) -> PipelineContext:
+        raise self._error
+
+
+class TestAnLLMProviderFailureEndsTheRun:
+    """Plan §0.1: an unreachable model is no more a finding than an unreachable source.
+
+    Caught in the runner rather than in each AI step, because every AI step
+    raises the same failures and every one must end the run the same way.
+    """
+
+    async def test_the_research_fails_rather_than_propagating(self) -> None:
+        runner = PipelineRunner([_RaisingProviderStep(LLMCredentialError("no key"))])
+
+        context = await runner.run(_context())
+
+        assert context.research.status is ResearchStatus.FAILED
+
+    async def test_the_cause_is_named_with_its_kind_and_step(self) -> None:
+        runner = PipelineRunner([_RaisingProviderStep(LLMUnavailableError("timed out"))])
+
+        context = await runner.run(_context())
+
+        failure = context.research.diagnostics.failure
+        assert failure is not None
+        assert failure.kind is FailureKind.LLM_UNAVAILABLE
+        assert failure.step == "asks_the_model"
+        assert "timed out" in failure.detail
+
+    async def test_any_results_built_so_far_are_discarded(self) -> None:
+        """§7.1: a failed run has no results page, so it may not carry results."""
+        context = _context()
+        context.research.results = [
+            Result(
+                entity_id="alaska",
+                entity_name="Alaska",
+                supporter_count=3,
+                share=0.25,
+                respondent_pool_size=12,
+                discussion_count=2,
+                weighted_score=3.0,
+                confidence=0.9,
+            )
+        ]
+        runner = PipelineRunner([_RaisingProviderStep(LLMCredentialError("no key"))])
+
+        context = await runner.run(context)
+
+        assert context.research.results == []
+
+    async def test_later_steps_do_not_run(self) -> None:
+        later = _RecordingStep("later")
+        runner = PipelineRunner(
+            [_RaisingProviderStep(LLMResponseError("refused")), later]
+        )
+
+        await runner.run(_context())
+
+        assert later.ran is False
+
+    async def test_the_failing_step_records_a_progress_event(self) -> None:
+        runner = PipelineRunner([_RaisingProviderStep(LLMCredentialError("no key"))])
+
+        context = await runner.run(_context())
+
+        assert context.progress == [
+            ProgressEvent(
+                sequence=1, step_name="asks_the_model", status=ResearchStatus.FAILED
+            )
+        ]
+
+    async def test_the_first_cause_is_the_one_kept(self) -> None:
+        """The original failure is what explains the missing evidence."""
+        context = _context()
+        context.research.diagnostics.record_failure(
+            kind=FailureKind.LLM_UNAVAILABLE, step="earlier", detail="the first one"
+        )
+        runner = PipelineRunner([_RaisingProviderStep(LLMCredentialError("no key"))])
+
+        context = await runner.run(context)
+
+        failure = context.research.diagnostics.failure
+        assert failure is not None
+        assert failure.step == "earlier"
+
+    async def test_a_non_provider_error_still_propagates(self) -> None:
+        """Only LLM failures are converted. Everything else is Phase 13's error contract."""
+        runner = PipelineRunner([_FailingStep()])
+
+        with pytest.raises(RuntimeError):
+            await runner.run(_context())

@@ -221,8 +221,6 @@ class SuppressionReason(StrEnum):
     from "there was nothing to find".
     """
 
-    TRIAGE_TOO_FEW_COMMENTS = "triage_too_few_comments"
-    TRIAGE_TOO_OLD = "triage_too_old"
     TRIAGE_EXCLUDED = "triage_excluded"
     TRIAGE_NOT_POLLING = "triage_not_polling"
     TRIAGE_NO_VERDICT = "triage_no_verdict"
@@ -251,6 +249,34 @@ class ResearchFlag(StrEnum):
     BUDGET_LIMIT_REACHED = "budget_limit_reached"
 
 
+class FailureKind(StrEnum):
+    """Named causes for a ``failed`` research (plan §0.1 rule 3).
+
+    "Something went wrong" is the wording §0.1 exists to forbid: it leaves
+    the user unable to tell a broken run from a quiet one. Each value here
+    points at a different remedy — fix the credential, wait and retry, fix
+    the request, or distrust the model's output.
+    """
+
+    LLM_CREDENTIAL = "llm_credential"
+    LLM_UNAVAILABLE = "llm_unavailable"
+    LLM_REQUEST_REJECTED = "llm_request_rejected"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
+
+
+class ResearchFailure(BaseModel):
+    """Why a research ended ``failed``, and where (plan §0.1 rules 1 and 3).
+
+    Persisted and exposed rather than logged. A run that failed for want of
+    a credential produced no evidence at all, and this is what keeps that
+    fact attributable instead of arriving as an empty result set.
+    """
+
+    kind: FailureKind
+    step: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+
+
 class ResearchDiagnostics(BaseModel):
     """Everything §0.1 requires a research to be able to explain about itself.
 
@@ -264,6 +290,8 @@ class ResearchDiagnostics(BaseModel):
     triage_decisions: list[TriageDecision] = Field(default_factory=list)
     suppressions: list[Suppression] = Field(default_factory=list)
     flags: list[ResearchFlag] = Field(default_factory=list)
+    failure: ResearchFailure | None = None
+    """Set only for a ``failed`` run — the named cause §0.1 rule 3 requires."""
 
     def record_suppression(
         self,
@@ -287,6 +315,16 @@ class ResearchDiagnostics(BaseModel):
     def raise_flag(self, flag: ResearchFlag) -> None:
         if flag not in self.flags:
             self.flags.append(flag)
+
+    def record_failure(self, *, kind: FailureKind, step: str, detail: str) -> None:
+        """Name the cause of a failed run. The first cause wins.
+
+        A failed run has no later steps, so in practice there is one cause;
+        should that ever change, the original failure is the one that
+        explains the missing evidence.
+        """
+        if self.failure is None:
+            self.failure = ResearchFailure(kind=kind, step=step, detail=detail)
 
 
 class Result(BaseModel):
