@@ -220,6 +220,64 @@ async def test_saving_updates_diagnostics_on_an_existing_research(
     assert loaded.diagnostics.suppressions[0].count == 7
 
 
+async def test_weak_results_survive_a_round_trip(
+    session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
+) -> None:
+    """plan §4.4: entities below the strong threshold are persisted, not dropped."""
+    research = make_research()
+    research.status = ResearchStatus.COMPLETED
+    research.weak_results = [
+        Result(
+            entity_id="new_mexico",
+            entity_name="New Mexico",
+            supporter_count=2,
+            share=0.2,
+            respondent_pool_size=10,
+            discussion_count=1,
+            weighted_score=1.5,
+            confidence=0.7,
+        )
+    ]
+
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+
+    async with session_factory() as session:
+        fetched = await ResearchRepository(session).get(research.id)
+
+    assert fetched is not None
+    assert [r.entity_name for r in fetched.weak_results] == ["New Mexico"]
+
+
+async def test_saving_updates_weak_results_on_an_existing_research(
+    session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
+) -> None:
+    research = make_research()
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+
+    research.weak_results = [
+        Result(
+            entity_id="new_mexico",
+            entity_name="New Mexico",
+            supporter_count=2,
+            share=0.2,
+            respondent_pool_size=10,
+            discussion_count=1,
+            weighted_score=1.5,
+            confidence=0.7,
+        )
+    ]
+    async with session_factory() as session:
+        await ResearchRepository(session).save(research)
+
+    async with session_factory() as session:
+        loaded = await ResearchRepository(session).get(research.id)
+
+    assert loaded is not None
+    assert [r.entity_name for r in loaded.weak_results] == ["New Mexico"]
+
+
 async def test_a_research_with_no_diagnostics_loads_as_empty(
     session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
 ) -> None:

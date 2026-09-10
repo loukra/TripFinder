@@ -6,6 +6,8 @@ persists the ``ResearchConfig`` it actually ran with (PROJECT.md §21).
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 
@@ -67,6 +69,39 @@ class EntityResolutionConfig(BaseModel):
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
+class RankingKey(StrEnum):
+    """Which computed number decides sort order first (plan §2.5, §4.3).
+
+    ``weightedScore`` can never exceed ``supporterCount`` (plan §4.2), so
+    either choice is a legitimate primary key; what must never happen is the
+    displayed order disagreeing with the displayed number (plan §2.5) — the
+    other of the two is always used as the tiebreak, never a third metric.
+    """
+
+    SUPPORTER_COUNT = "supporter_count"
+    WEIGHTED_SCORE = "weighted_score"
+
+
+class RankingConfig(BaseModel):
+    """The metric's thresholds and weights (plan §4) — the exact numbers behind
+    the headline count.
+
+    ``relevance_threshold`` has no plan-specified default: plan §4.1 defines
+    the gate ("relevance >= relevanceThreshold") but leaves the number to
+    implementation, the same way every other floor in this file is a
+    considered default rather than a hardcoded constant. 0.5 is the
+    midpoint of the 0-1 scale §5's ``topic_relevance``/``criterion_relevance``
+    report on — evaluation (plan Phase 15) is expected to tune it.
+    """
+
+    relevance_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    decay_per_year: float = Field(default=0.10, ge=0.0)
+    min_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    ranking_key: RankingKey = Field(default=RankingKey.SUPPORTER_COUNT)
+    minimum_independent_users: int = Field(default=5, ge=0)
+    max_strong_results: int = Field(default=5, gt=0)
+
+
 class ResearchConfig(BaseModel):
     """The full configuration a research run persists (PROJECT.md §21)."""
 
@@ -76,3 +111,4 @@ class ResearchConfig(BaseModel):
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)
+    ranking: RankingConfig = Field(default_factory=RankingConfig)

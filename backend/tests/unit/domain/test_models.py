@@ -213,6 +213,21 @@ def test_research_rejects_invalid_status() -> None:
         )
 
 
+def test_research_weak_results_default_to_empty_and_round_trip() -> None:
+    """plan §4.4: entities below the strong threshold are persisted, not dropped."""
+    empty = Research(original_query="q", created_at=NOW, status=ResearchStatus.PENDING)
+    assert empty.weak_results == []
+
+    research = Research(
+        original_query="q",
+        created_at=NOW,
+        status=ResearchStatus.COMPLETED,
+        weak_results=[_result()],
+    )
+    restored = Research.model_validate_json(research.model_dump_json())
+    assert restored.weak_results == research.weak_results
+
+
 def test_research_rejects_empty_query() -> None:
     with pytest.raises(ValidationError):
         Research.model_validate(
