@@ -57,7 +57,7 @@ async def test_search_returns_the_adapters_documents() -> None:
     assert [document.id for document in result.documents] == ["post1", "post2"]
 
 
-async def test_search_passes_only_query_text_and_limit_to_the_adapter() -> None:
+async def test_search_passes_only_query_text_and_limit_to_the_adapter_by_default() -> None:
     adapter = _RecordingAdapter()
     tool = SourceSearchTool(adapter, limit_per_query=7)
 
@@ -65,6 +65,17 @@ async def test_search_passes_only_query_text_and_limit_to_the_adapter() -> None:
 
     assert len(adapter.calls) == 1
     assert adapter.calls[0] == SourceSearchQuery(query="hidden gem parks", limit=7)
+
+
+async def test_search_passes_the_subreddit_through_when_given() -> None:
+    adapter = _RecordingAdapter()
+    tool = SourceSearchTool(adapter, limit_per_query=7)
+
+    await tool.search("hidden gem parks", subreddit="travel")
+
+    assert adapter.calls[0] == SourceSearchQuery(
+        query="hidden gem parks", subreddit="travel", limit=7
+    )
 
 
 async def test_adapter_failure_becomes_a_structured_result_not_an_exception() -> None:

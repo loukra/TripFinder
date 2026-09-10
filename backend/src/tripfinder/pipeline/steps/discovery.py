@@ -2,14 +2,20 @@
 through the source tool boundary (plan §3.1).
 
 The LLM proposes one query per turn; everything that bounds the loop is
-deterministic. Three guarantees, each load-bearing for the acceptance
+deterministic. Four guarantees, each load-bearing for the acceptance
 criteria in plan §10 Phase 6:
 
 * the loop never issues more than ``budget.max_search_queries`` searches;
-* a query that is a near-duplicate of one already searched is never sent
-  to the source — the turn is spent, but no search call is wasted;
-* the loop still terminates even if the LLM keeps proposing duplicates,
-  because a run of unproductive turns aborts discovery early.
+* a query that is a near-duplicate of one already searched *in the same
+  subreddit* is never sent to the source — the turn is spent, but no search
+  call is wasted;
+* a turn naming no subreddit, or one outside the plan's
+  ``candidate_subreddits``, is never sent either — Arctic Shift's live
+  search API requires a subreddit/author/link_id/parent_id to scope a
+  full-text query (plan §8), so an unscoped query would only fail at the
+  source;
+* the loop still terminates even if the LLM keeps proposing unproductive
+  turns, because a run of them aborts discovery early.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from tripfinder.sources.failures import UNKNOWN_FAILURE_KIND
 from tripfinder.sources.tools import SourceSearchTool
 
 _DUPLICATE_JACCARD_THRESHOLD = 0.7
-_MAX_CONSECUTIVE_DUPLICATE_TURNS = 3
+_MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS = 3
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -49,6 +55,10 @@ def _is_near_duplicate(candidate: str, issued_queries: list[str]) -> bool:
     return False
 
 
+def _normalize_subreddit(name: str) -> str:
+    return name.strip().removeprefix("/r/").removeprefix("r/").strip("/").lower()
+
+
 class AgenticDiscoveryStep:
     """Real implementation of plan §4.6 step 3 (stands in for `FakeDiscoveryStep`)."""
 
@@ -58,10 +68,12 @@ class AgenticDiscoveryStep:
         plan: ResearchPlan = context.data["plan"]
         budget = context.research.research_config.budget
         tool = SourceSearchTool(context.source, limit_per_query=budget.max_posts_per_query)
+        valid_subreddits = {_normalize_subreddit(name) for name in plan.candidate_subreddits}
 
         issued_queries: list[str] = []
+        issued_by_subreddit: dict[str, list[str]] = {}
         documents: dict[str, SourceDocument] = {}
-        consecutive_duplicate_turns = 0
+        consecutive_unproductive_turns = 0
         # Discovery searches are source calls like any other, so they count
         # toward the §8.1 accounting the health assessment reads later.
         recorder = get_recorder(context)
@@ -77,15 +89,26 @@ class AgenticDiscoveryStep:
             if not turn.should_continue or not turn.next_query:
                 break
 
-            if _is_near_duplicate(turn.next_query, issued_queries):
-                consecutive_duplicate_turns += 1
-                if consecutive_duplicate_turns >= _MAX_CONSECUTIVE_DUPLICATE_TURNS:
+            subreddit = _normalize_subreddit(turn.subreddit) if turn.subreddit else None
+            if subreddit is None or subreddit not in valid_subreddits:
+                # No scope, or one outside the plan's candidates: the live
+                # source would reject this query anyway (plan §8), so the
+                # turn is spent without spending a search call.
+                consecutive_unproductive_turns += 1
+                if consecutive_unproductive_turns >= _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS:
                     break
                 continue
 
-            consecutive_duplicate_turns = 0
-            result = await tool.search(turn.next_query)
+            if _is_near_duplicate(turn.next_query, issued_by_subreddit.get(subreddit, [])):
+                consecutive_unproductive_turns += 1
+                if consecutive_unproductive_turns >= _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS:
+                    break
+                continue
+
+            consecutive_unproductive_turns = 0
+            result = await tool.search(turn.next_query, subreddit=subreddit)
             issued_queries.append(turn.next_query)
+            issued_by_subreddit.setdefault(subreddit, []).append(turn.next_query)
             if result.ok:
                 recorder.record_success(context.source.name)
             else:

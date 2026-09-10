@@ -76,6 +76,11 @@ class ArcticShiftAdapter:
         while len(documents) < query.limit:
             page_limit = min(self._config.page_size, query.limit - len(documents))
             params = {"query": query.query, "limit": str(page_limit), "sort": "desc"}
+            # The live API rejects a bare `query` with no author/subreddit
+            # scope (plan §8) — `SourceSearchQuery.subreddit` is how the
+            # caller supplies it (see analysis/discovery.py).
+            if query.subreddit:
+                params["subreddit"] = query.subreddit
             if before is not None:
                 params["before"] = str(before)
 

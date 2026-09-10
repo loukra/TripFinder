@@ -67,6 +67,42 @@ async def test_search_maps_fixture_posts_to_documents(
     assert all(d.source == "arctic_shift" for d in documents)
 
 
+async def test_search_sends_subreddit_when_given(
+    load_fixture: LoadFixture, fast_config: FastConfig
+) -> None:
+    """The live search API rejects a bare `query` with no author/subreddit/
+    link_id/parent_id to scope it (plan §8) — this is the request-shape
+    half of that contract, cassette tests alone can't catch since the
+    handler never has to look at what it was sent."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+
+    adapter = _adapter(handler, fast_config)
+
+    await adapter.search(SourceSearchQuery(query="underrated nature", subreddit="travel"))
+
+    assert calls[0].url.params["subreddit"] == "travel"
+
+
+async def test_search_omits_subreddit_param_when_not_given(
+    load_fixture: LoadFixture, fast_config: FastConfig
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+
+    adapter = _adapter(handler, fast_config)
+
+    await adapter.search(SourceSearchQuery(query="underrated nature"))
+
+    assert "subreddit" not in calls[0].url.params
+
+
 async def test_search_returns_empty_sequence_for_empty_results(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
