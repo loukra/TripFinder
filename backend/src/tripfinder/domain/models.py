@@ -231,6 +231,8 @@ class SuppressionReason(StrEnum):
     DUPLICATE_COMMENT = "duplicate_comment"
     PREFILTER_TOO_SHORT = "prefilter_too_short"
     PREFILTER_EMPTY_BODY = "prefilter_empty_body"
+    ANALYSIS_NO_RESULT = "analysis_no_result"
+    ANALYSIS_FABRICATED_QUOTE = "analysis_fabricated_quote"
 
 
 class Suppression(BaseModel):
