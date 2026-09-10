@@ -278,6 +278,9 @@ class SuppressionReason(StrEnum):
     ENTITY_OFF_GRANULARITY = "entity_off_granularity"
     ENTITY_RESOLUTION_NO_RESULT = "entity_resolution_no_result"
     AGGREGATION_BELOW_RELEVANCE_THRESHOLD = "aggregation_below_relevance_threshold"
+    SUMMARIZATION_NO_EVIDENCE = "summarization_no_evidence"
+    SUMMARIZATION_NO_RESULT = "summarization_no_result"
+    SUMMARIZATION_FABRICATED_QUOTE = "summarization_fabricated_quote"
 
 
 class Suppression(BaseModel):
