@@ -1,9 +1,16 @@
-"""Sequential pipeline execution (plan §10 Phase 2)."""
+"""Sequential pipeline execution (plan §10 Phase 2).
+
+A run stops as soon as it reaches a halting state (plan §7). Without that,
+a research that has already terminated — rejected, awaiting clarification,
+or out of reachable sources — would keep running steps and could build a
+results object §7.1 says must not exist.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from tripfinder.domain.models import is_halting
 from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEvent
 
 ProgressListener = Callable[[ProgressEvent], None]
@@ -27,4 +34,6 @@ class PipelineRunner:
             context.progress.append(event)
             if self._on_progress is not None:
                 self._on_progress(event)
+            if is_halting(context.research.status):
+                break
         return context

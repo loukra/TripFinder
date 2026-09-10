@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from tripfinder.domain.models import SourceDocument
 from tripfinder.domain.ports import SourceAdapter, SourceSearchQuery
+from tripfinder.sources.failures import failure_kind
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ class SourceSearchResult(BaseModel):
     query: str
     documents: list[SourceDocument] = Field(default_factory=list)
     error: str | None = None
+    failure_kind: str | None = None
+    """The §8.1 ``failure_kinds`` label, so a failed search still reaches health accounting."""
 
     @property
     def ok(self) -> bool:
@@ -47,5 +50,5 @@ class SourceSearchTool:
             )
         except Exception as exc:  # an adapter failure must never crash the discovery loop
             logger.warning("source tool: search %r failed: %s", query, exc)
-            return SourceSearchResult(query=query, error=str(exc))
+            return SourceSearchResult(query=query, error=str(exc), failure_kind=failure_kind(exc))
         return SourceSearchResult(query=query, documents=list(documents))

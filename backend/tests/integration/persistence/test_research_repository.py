@@ -12,7 +12,19 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tripfinder.domain.models import Research, ResearchStatus, Result
+from tripfinder.domain.models import (
+    Research,
+    ResearchDiagnostics,
+    ResearchFlag,
+    ResearchStatus,
+    Result,
+    SourceHealth,
+    SourceOutcome,
+    SuppressionReason,
+    TriageDecidedBy,
+    TriageDecision,
+    TriageVerdict,
+)
 from tripfinder.persistence.repositories import ResearchNotFoundError, ResearchRepository
 
 
@@ -146,3 +158,78 @@ async def test_completed_research_can_be_retrieved_after_a_fresh_session(
     assert fetched is not None
     assert fetched.status == ResearchStatus.COMPLETED
     assert fetched.results[0].entity_name == "Oregon"
+
+
+async def test_diagnostics_survive_a_round_trip(
+    session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
+) -> None:
+    """Plan §0.1 rule 1 — counts and reasons are persisted in the snapshot."""
+    research = make_research()
+    research.diagnostics.source_health = [
+        SourceHealth(
+            adapter="arctic_shift",
+            calls_attempted=10,
+            calls_succeeded=5,
+            calls_failed=5,
+            failure_kinds={"timeout": 5},
+            success_rate=0.5,
+        )
+    ]
+    research.diagnostics.source_outcome = SourceOutcome.DEGRADED
+    research.diagnostics.triage_decisions = [
+        TriageDecision(
+            document_id="d1",
+            verdict=TriageVerdict.EXCLUDE,
+            reason="only 2 comments",
+            confidence=1.0,
+            decided_by=TriageDecidedBy.RULE,
+        )
+    ]
+    research.diagnostics.record_suppression(
+        step="document_triage", reason=SuppressionReason.TRIAGE_EXCLUDED, count=3
+    )
+    research.diagnostics.raise_flag(ResearchFlag.LOW_POLLING_DOCUMENT_RATIO)
+
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+
+    async with session_factory() as session:
+        loaded = await ResearchRepository(session).get(research.id)
+
+    assert loaded is not None
+    assert loaded.diagnostics == research.diagnostics
+
+
+async def test_saving_updates_diagnostics_on_an_existing_research(
+    session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
+) -> None:
+    research = make_research()
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+
+    research.diagnostics.record_suppression(
+        step="cheap_prefilter", reason=SuppressionReason.PREFILTER_TOO_SHORT, count=7
+    )
+    async with session_factory() as session:
+        await ResearchRepository(session).save(research)
+
+    async with session_factory() as session:
+        loaded = await ResearchRepository(session).get(research.id)
+
+    assert loaded is not None
+    assert loaded.diagnostics.suppressions[0].count == 7
+
+
+async def test_a_research_with_no_diagnostics_loads_as_empty(
+    session_factory: async_sessionmaker[AsyncSession], make_research: Callable[..., Research]
+) -> None:
+    research = make_research()
+
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+
+    async with session_factory() as session:
+        loaded = await ResearchRepository(session).get(research.id)
+
+    assert loaded is not None
+    assert loaded.diagnostics == ResearchDiagnostics()

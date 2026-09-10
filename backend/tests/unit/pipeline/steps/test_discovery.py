@@ -20,6 +20,7 @@ from tripfinder.domain.models import (
 )
 from tripfinder.domain.ports import LLMProvider, SourceAdapter, SourceSearchQuery
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.health import get_recorder
 from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
 
 
@@ -269,3 +270,57 @@ async def test_discovery_prompt_never_contains_adapter_internals() -> None:
 
     assert spy.prompts  # sanity: the loop actually ran and prompted the LLM
     assert all(adapter.api_key not in prompt for prompt in spy.prompts)
+
+
+class _FailingSearchAdapter:
+    """Fails the first search, then succeeds — a partial outage during discovery."""
+
+    name = "flaky"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
+        self.calls += 1
+        if self.calls == 1:
+            error = RuntimeError("gateway")
+            error.kind = "http_5xx"  # type: ignore[attr-defined]
+            raise error
+        return [_document(f"d{self.calls}")]
+
+    async def fetch_document(self, document_id: str) -> SourceDocument:
+        raise LookupError(document_id)
+
+    async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
+        return []
+
+
+async def test_discovery_searches_are_counted_toward_source_health() -> None:
+    """A search that fails is a source failure, not an empty result (plan §8.1)."""
+    adapter = _FailingSearchAdapter()
+    llm = FakeLLMProvider(
+        {
+            DiscoveryTurnResponse: deque(
+                [
+                    DiscoveryTurnResponse(
+                        should_continue=True, next_query="underrated states", reasoning="start"
+                    ),
+                    DiscoveryTurnResponse(
+                        should_continue=True, next_query="quiet national parks", reasoning="more"
+                    ),
+                    DiscoveryTurnResponse(should_continue=False, reasoning="done"),
+                ]
+            )
+        }
+    )
+    context = _context(_plan(), llm=llm, source=adapter)
+
+    await AgenticDiscoveryStep().run(context)
+
+    (health,) = get_recorder(context).snapshot()
+    assert health.adapter == "flaky"
+    assert (health.calls_attempted, health.calls_succeeded) == (2, 1)
+    assert health.failure_kinds == {"http_5xx": 1}

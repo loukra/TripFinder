@@ -31,7 +31,7 @@ packages = ["src/tripfinder"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
 markers = [
     "evaluation: real-LLM evaluation tests, excluded from normal test runs",
@@ -45,11 +45,15 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.isort]
+# `builders` is the shared test-builder package under tests/ (on pythonpath).
+known-first-party = ["tripfinder", "builders"]
+
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
 explicit_package_bases = true
-mypy_path = ["src"]
+mypy_path = ["src", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["testcontainers.*", "alembic.*"]
