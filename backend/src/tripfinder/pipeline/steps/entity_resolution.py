@@ -76,6 +76,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_RESOLUTION_BATCH_SIZE = 50
 """Distinct surface forms per structured call."""
 
+_FormKey = tuple[str, EntityType]
+"""Identifies one distinct surface form: its exact text and the tier it named."""
+
 
 @dataclass
 class _Form:
@@ -101,7 +104,7 @@ class _Verdict:
     suppression: SuppressionReason | None = None
 
 
-def _key(mention: EntityMention) -> tuple[str, EntityType]:
+def _key(mention: EntityMention) -> _FormKey:
     """Surface forms group verbatim — casing is what tells ``AK`` from ``ak``."""
     return (mention.raw_text, mention.entity_type)
 
@@ -177,9 +180,9 @@ class EntityResolutionStep:
 
     # -- 1. group ------------------------------------------------------
 
-    def _collect(self, analyses: Sequence[CommentAnalysis]) -> dict[tuple[str, EntityType], _Form]:
+    def _collect(self, analyses: Sequence[CommentAnalysis]) -> dict[_FormKey, _Form]:
         """Every mention, grouped by the surface form it used, in first-seen order."""
-        forms: dict[tuple[str, EntityType], _Form] = {}
+        forms: dict[_FormKey, _Form] = {}
         for analysis in analyses:
             for mention in analysis.mentions:
                 form = forms.get(_key(mention))
@@ -234,7 +237,7 @@ class EntityResolutionStep:
         plan: ResearchPlan,
         questions: Sequence[ResolutionQuestion],
         config: EntityResolutionConfig,
-    ) -> dict[tuple[str, EntityType], _Verdict]:
+    ) -> dict[_FormKey, _Verdict]:
         if not questions:
             return {}
 
@@ -334,7 +337,7 @@ class EntityResolutionStep:
     def _join(
         self,
         analyses: Sequence[CommentAnalysis],
-        verdicts: dict[tuple[str, EntityType], _Verdict],
+        verdicts: dict[_FormKey, _Verdict],
         entities: dict[str, Entity],
     ) -> list[ResolvedMention]:
         """The mentions that reached an entity, in the order they were analysed.
@@ -359,8 +362,8 @@ class EntityResolutionStep:
     def _record(
         self,
         context: PipelineContext,
-        forms: dict[tuple[str, EntityType], _Form],
-        verdicts: dict[tuple[str, EntityType], _Verdict],
+        forms: dict[_FormKey, _Form],
+        verdicts: dict[_FormKey, _Verdict],
     ) -> None:
         """Plan §0.1: every name this step could not place, said out loud."""
         diagnostics = context.research.diagnostics
