@@ -6,11 +6,15 @@ db:
 db-stop:
 	docker compose stop postgres
 
+# `.env` is where OPENAI_API_KEY lives (see .env.example). Compose reads it
+# on its own; the native processes need it exported for them.
+LOAD_ENV = set -a; [ -f .env ] && . ./.env; set +a;
+
 api:
-	cd backend && PYTHONPATH=src uv run uvicorn tripfinder.main:app --reload
+	$(LOAD_ENV) cd backend && PYTHONPATH=src uv run uvicorn tripfinder.main:app --reload
 
 worker:
-	cd backend && PYTHONPATH=src uv run python -m tripfinder.worker
+	$(LOAD_ENV) cd backend && PYTHONPATH=src uv run python -m tripfinder.worker
 
 web:
 	cd frontend && npm run dev

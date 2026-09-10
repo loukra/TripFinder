@@ -70,7 +70,7 @@ amendment, not an implementation detail.
 | Python toolchain | **uv** — Python version, venvs, dependencies | One tool replacing pyenv + pip + venv. Installed; 3.12.14 pinned |
 | Job queue | **Postgres-backed job table + polling worker. No Redis.** | One less service; local-first; `PROJECT.md` §29 "prefer simple solutions" |
 | LLM provider | **OpenAI**, behind an `LLMProvider` port | User decision. Port keeps §13's replaceability |
-| Default model | `gpt-5-mini` for analysis, larger tier for query understanding + summaries | ~$0.15/research at balanced budget |
+| Default model | **`gpt-5.6-luna`** (see §2.10). Larger tier for query understanding + summaries remains intended | Cost-oriented reasoning tier; per-research cost to be measured in Phase 15 |
 | Model config | Model IDs in config only. **Never in the domain layer** | `PROJECT.md` §13 |
 | Source | **Arctic Shift only** (`https://arctic-shift.photon-reddit.com`) | No API key or approval needed. Official Reddit API requires manual approval since Nov 2025 |
 | Source port | `SourceAdapter` port **is still built**; only one adapter implements it | Preserves §10 without speculative second adapter |
@@ -236,6 +236,27 @@ credential would otherwise produce an empty analysis — a failure wearing the f
 **Resolution:** insert **Phase 7.5**, which ships the OpenAI adapter, the runtime settings layer,
 and provider selection defaulting to fake. **Phase 13** additionally ships the composition-root
 switch to the real pipeline.
+
+---
+
+### 2.10 The default model is now `gpt-5.6-luna` — **§1 amended**
+
+§1 locked `gpt-5-mini` as the default analysis model, chosen for the ~$0.15/research figure in
+§1.1. **User decision during Phase 7.5:** the default is now `gpt-5.6-luna`, OpenAI's
+cost-oriented reasoning tier (released 2026-07-09), which the Responses API serves with strict
+structured outputs — the guarantee every AI step in this system depends on.
+
+Two consequences the plan should not pretend away:
+
+1. **§1.1's ~$0.15/research is no longer a verified figure.** It was derived for a different
+   model. It stays as the *target*, and Phase 15 measures the real number, as it was always going
+   to.
+2. **`reasoning.effort` is now a live cost lever** (`none | low | medium | high | xhigh | max`,
+   default `medium`) that `OpenAIConfig` does not yet expose, because no step calls the provider
+   yet. The phase that first does should add it rather than accept the default silently.
+
+The model id is config (`OpenAIConfig.model`), never a constant in the domain layer, so this
+amendment changes one default and nothing else.
 
 ---
 
