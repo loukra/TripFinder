@@ -87,14 +87,7 @@ async def create_research(
 @router.get("/{research_id}", response_model=ResearchStatusResponse)
 async def get_research(research_id: UUID, session: SessionDep) -> ResearchStatusResponse:
     research = await _get_or_404(research_id, session)
-    return ResearchStatusResponse(
-        id=research.id,
-        status=research.status,
-        message=research_message(research.status, research.diagnostics.failure),
-        statistics=research.statistics,
-        diagnostics=research.diagnostics,
-        clarification=_visible_clarification(research),
-    )
+    return _status_response(research)
 
 
 @router.post(
@@ -179,14 +172,7 @@ async def cancel_research(research_id: UUID, session: SessionDep) -> ResearchSta
 
     refreshed = await ResearchRepository(session).get(research_id)
     assert refreshed is not None
-    return ResearchStatusResponse(
-        id=refreshed.id,
-        status=refreshed.status,
-        message=research_message(refreshed.status, refreshed.diagnostics.failure),
-        statistics=refreshed.statistics,
-        diagnostics=refreshed.diagnostics,
-        clarification=None,
-    )
+    return _status_response(refreshed)
 
 
 @router.get(
@@ -208,7 +194,7 @@ async def get_research_results(
             status_code=409,
             detail=SourceUnavailableError(
                 status=research.status,
-                message=research_message(research.status, research.diagnostics.failure),
+                message=_message(research),
                 adapters=research.diagnostics.source_health,
             ).model_dump(mode="json"),
         )
@@ -220,27 +206,18 @@ async def get_research_results(
             status_code=409,
             detail=ResearchFailedError(
                 status=research.status,
-                message=research_message(research.status, research.diagnostics.failure),
+                message=_message(research),
                 failure=research.diagnostics.failure,
             ).model_dump(mode="json"),
         )
 
-    if research.status not in _RESULTS_READY_STATUSES:
-        # Still running, needs_clarification, rejected, or cancelled: plan
-        # §7.1's "No" column, for every status not already handled above.
-        raise HTTPException(
-            status_code=409,
-            detail=ResearchNotReadyError(
-                status=research.status,
-                message=research_message(research.status, research.diagnostics.failure),
-            ).model_dump(mode="json"),
-        )
+    _require_results_ready(research)
 
     suppress_share = percentages_suppressed(research.status)
     return ResearchResultsResponse(
         id=research.id,
         status=research.status,
-        message=research_message(research.status, research.diagnostics.failure),
+        message=_message(research),
         percentages_suppressed=suppress_share,
         results=[
             ResultItem.from_domain(result, suppress_share=suppress_share)
@@ -265,14 +242,7 @@ async def get_research_evidence(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> EvidenceResponse:
     research = await _get_or_404(research_id, session)
-    if research.status not in _RESULTS_READY_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=ResearchNotReadyError(
-                status=research.status,
-                message=research_message(research.status, research.diagnostics.failure),
-            ).model_dump(mode="json"),
-        )
+    _require_results_ready(research)
 
     result = _find_result(research, entity_id)
     if result is None:
@@ -292,8 +262,34 @@ async def get_research_evidence(
     )
 
 
+def _message(research: Research) -> str:
+    return research_message(research.status, research.diagnostics.failure)
+
+
 def _visible_clarification(research: Research) -> ClarificationRequest | None:
     return research.clarification if research.status is ResearchStatus.NEEDS_CLARIFICATION else None
+
+
+def _status_response(research: Research) -> ResearchStatusResponse:
+    return ResearchStatusResponse(
+        id=research.id,
+        status=research.status,
+        message=_message(research),
+        statistics=research.statistics,
+        diagnostics=research.diagnostics,
+        clarification=_visible_clarification(research),
+    )
+
+
+def _require_results_ready(research: Research) -> None:
+    """Plan §7.1's "No" column, for every status not already handled by a richer error."""
+    if research.status not in _RESULTS_READY_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=ResearchNotReadyError(
+                status=research.status, message=_message(research)
+            ).model_dump(mode="json"),
+        )
 
 
 def _find_result(research: Research, entity_id: str) -> Result | None:

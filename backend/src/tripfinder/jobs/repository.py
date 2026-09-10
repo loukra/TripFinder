@@ -74,22 +74,20 @@ class JobRepository:
         return _to_job(row)
 
     async def mark_succeeded(self, job_id: UUID) -> None:
-        row = await self._get_or_raise(job_id)
-        row.status = "succeeded"
-        row.finished_at = datetime.now(UTC)
-        await self._session.commit()
+        await self._finish(job_id, "succeeded")
 
     async def mark_failed(self, job_id: UUID, error: str) -> None:
-        row = await self._get_or_raise(job_id)
-        row.status = "failed"
-        row.finished_at = datetime.now(UTC)
-        row.error = error
-        await self._session.commit()
+        await self._finish(job_id, "failed", error=error)
 
     async def mark_cancelled(self, job_id: UUID) -> None:
+        await self._finish(job_id, "cancelled")
+
+    async def _finish(self, job_id: UUID, status: str, *, error: str | None = None) -> None:
         row = await self._get_or_raise(job_id)
-        row.status = "cancelled"
+        row.status = status
         row.finished_at = datetime.now(UTC)
+        if error is not None:
+            row.error = error
         await self._session.commit()
 
     async def request_cancel(self, job_id: UUID) -> None:
