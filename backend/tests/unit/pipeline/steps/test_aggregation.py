@@ -1,7 +1,7 @@
 """Aggregation + Ranking as a pipeline step (plan §4.6 steps 11-12).
 
 The math itself is covered exhaustively in ``tests/unit/ranking/
-test_aggregation.py``; this file only checks the wiring — that the step
+test_aggregation_math.py``; this file only checks the wiring — that the step
 reads the right context keys, writes ``results``/``weak_results``, records
 the relevance suppression, and settles the run's terminal status using
 whatever Phase 7's health step left behind.

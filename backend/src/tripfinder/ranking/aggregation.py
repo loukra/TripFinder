@@ -81,15 +81,7 @@ def aggregate_and_rank(
         by_entity[opinion.entity_id].append(opinion)
 
     results = [
-        _to_result(
-            entity_id,
-            opinions,
-            entities_by_id[entity_id],
-            comments_by_id,
-            pool_size,
-            config,
-            now=now,
-        )
+        _to_result(entities_by_id[entity_id], opinions, comments_by_id, pool_size, config, now=now)
         for entity_id, opinions in by_entity.items()
     ]
     results.sort(key=_sort_key(config.ranking_key))
@@ -111,9 +103,8 @@ def aggregate_and_rank(
 
 
 def _to_result(
-    entity_id: str,
-    opinions: Sequence[Opinion],
     entity: Entity,
+    opinions: Sequence[Opinion],
     comments_by_id: dict[str, Comment],
     pool_size: int,
     config: RankingConfig,
@@ -135,14 +126,11 @@ def _to_result(
         if opinion.comment_id in comments_by_id
     ]
     document_ids = {comment.source_document_id for comment in supporting_comments}
-    permalinks_by_str = {
-        str(comment.permalink): comment.permalink for comment in supporting_comments
-    }
-    permalinks = [permalinks_by_str[key] for key in sorted(permalinks_by_str)]
+    permalinks = sorted({comment.permalink for comment in supporting_comments}, key=str)
     confidence = sum(opinion.confidence for opinion in opinions) / len(opinions)
 
     return Result(
-        entity_id=entity_id,
+        entity_id=entity.canonical_id,
         entity_name=entity.canonical_name,
         supporter_count=supporter_count,
         share=supporter_count / pool_size if pool_size else 0.0,

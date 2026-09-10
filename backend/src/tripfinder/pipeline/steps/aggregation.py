@@ -21,7 +21,6 @@ from tripfinder.domain.models import (
     Entity,
     Opinion,
     ResearchFlag,
-    ResearchStatus,
     SourceOutcome,
     SuppressionReason,
 )
@@ -39,7 +38,6 @@ class AggregationStep:
         self._now = now
 
     async def run(self, context: PipelineContext) -> PipelineContext:
-        context.research.status = ResearchStatus.AGGREGATING
         now = self._now or datetime.now(UTC)
 
         counted_opinions: list[Opinion] = list(context.data.get("counted_opinions", []))
