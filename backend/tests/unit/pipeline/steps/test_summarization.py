@@ -333,17 +333,15 @@ class TestBatching:
             for i, entity in enumerate(entities)
         ]
         results = [_result(entity) for entity in entities]
+        pairs = list(zip(entities, resolutions, strict=True))
         responses = [
             EntitySummaryBatch(
                 items=[
                     _summary(entity, cited_quotes=(resolution.mention.supporting_quote,))
-                    for entity, resolution in zip(pair_entities, pair_resolutions, strict=True)
+                    for entity, resolution in batch
                 ]
             )
-            for pair_entities, pair_resolutions in (
-                (entities[:2], resolutions[:2]),
-                (entities[2:], resolutions[2:]),
-            )
+            for batch in (pairs[:2], pairs[2:])
         ]
         context = _context(results=results, resolutions=resolutions, llm=RecordingLLM(responses))
 

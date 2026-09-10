@@ -86,10 +86,6 @@ class SummarizationStep:
 
     async def run(self, context: PipelineContext) -> PipelineContext:
         results: list[Result] = context.research.results
-        if not results:
-            self._record(context, no_evidence=0, missing=0, fabricated=0, discarded=0)
-            return context
-
         evidence_by_entity = self._collect_evidence(context)
         with_evidence = [
             EntityEvidence(
