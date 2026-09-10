@@ -15,9 +15,16 @@ from tripfinder.domain.models import Comment, SourceDocument
 
 
 class SourceSearchQuery(BaseModel):
-    """A single bounded search request issued to a SourceAdapter (PROJECT.md §10)."""
+    """A single bounded search request issued to a SourceAdapter (PROJECT.md §10).
+
+    ``subreddit`` is optional at the port level — some adapters may support
+    unscoped full-text search — but Arctic Shift's live search API rejects a
+    ``query`` with no ``author``/``subreddit``/``link_id``/``parent_id`` to
+    scope it (plan §8), so the real adapter requires one in practice.
+    """
 
     query: str = Field(min_length=1)
+    subreddit: str | None = Field(default=None)
     limit: int = Field(default=25, gt=0)
 
 

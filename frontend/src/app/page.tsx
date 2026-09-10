@@ -1,180 +1,193 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ApiError,
+  cancelResearch,
+  clarifyResearch,
+  createResearch,
+  getPollIntervalMs,
+  getResearch,
+  getResults,
+} from "@/lib/api";
+import { ClarificationView } from "@/components/ClarificationView";
+import { DiagnosticsSummary } from "@/components/DiagnosticsSummary";
+import { ProgressView } from "@/components/ProgressView";
+import { ResultsView } from "@/components/ResultsView";
+import { SearchForm } from "@/components/SearchForm";
+import {
+  RESULTS_READY_STATUSES,
+  STOP_POLLING_STATUSES,
+  type ClarificationRequest,
+  type EntityType,
+  type ResearchDiagnostics,
+  type ResearchResultsResponse,
+  type ResearchStatus,
+} from "@/lib/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const POLL_INTERVAL_MS = 2000;
-
-const TERMINAL_STATUSES = new Set([
-  "completed",
-  "completed_partial",
-  "completed_degraded",
-  "source_unavailable",
-  "rejected",
-  "failed",
-  "cancelled",
-]);
-
-const RESULTS_STATUSES = new Set([
-  "completed",
-  "completed_partial",
-  "completed_degraded",
-]);
-
-type ResearchCreateResponse = {
+interface RunState {
   id: string;
-  status: string;
-};
-
-type ResearchStatusResponse = {
-  id: string;
-  status: string;
-  statistics: Record<string, number>;
-};
-
-type Result = {
-  entity_id: string;
-  entity_name: string;
-  supporter_count: number;
-  share: number | null;
-  respondent_pool_size: number;
-  discussion_count: number;
-  weighted_score: number;
-  confidence: number;
-};
-
-type ResearchResultsResponse = {
-  id: string;
-  status: string;
+  status: ResearchStatus;
   message: string;
-  percentages_suppressed: boolean;
-  results: Result[];
-};
-
-async function fetchJson<T>(url: string, errorLabel: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) throw new Error(`${errorLabel}: ${response.status}`);
-  return (await response.json()) as T;
+  statistics: Record<string, number>;
+  diagnostics: ResearchDiagnostics;
+  clarification: ClarificationRequest | null;
 }
 
 export default function Home() {
-  const [query, setQuery] = useState("");
-  const [researchId, setResearchId] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [results, setResults] = useState<Result[] | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [run, setRun] = useState<RunState | null>(null);
+  const [results, setResults] = useState<ResearchResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (pollHandle.current !== null) clearInterval(pollHandle.current);
-    };
+  const stopPolling = useCallback(() => {
+    if (pollHandle.current !== null) {
+      clearInterval(pollHandle.current);
+      pollHandle.current = null;
+    }
   }, []);
 
-  async function pollOnce(id: string) {
-    try {
-      const current = await fetchJson<ResearchStatusResponse>(
-        `${API_URL}/api/research/${id}`,
-        "status check failed"
-      );
-      setStatus(current.status);
+  useEffect(() => stopPolling, [stopPolling]);
 
-      if (!TERMINAL_STATUSES.has(current.status)) return;
+  // Returns the fetched status so callers can decide whether polling should
+  // start at all — a research that already landed on a stop-polling status
+  // (e.g. needs_clarification) on its very first fetch must never have an
+  // interval started for it, or a fast-enough tick can race the user's next
+  // action.
+  const applyStatus = useCallback(
+    async (id: string): Promise<ResearchStatus | null> => {
+      try {
+        const current = await getResearch(id);
+        setRun({
+          id,
+          status: current.status,
+          message: current.message,
+          statistics: current.statistics,
+          diagnostics: current.diagnostics,
+          clarification: current.clarification,
+        });
 
-      if (pollHandle.current !== null) {
-        clearInterval(pollHandle.current);
-        pollHandle.current = null;
+        if (STOP_POLLING_STATUSES.has(current.status)) {
+          stopPolling();
+          if (RESULTS_READY_STATUSES.has(current.status)) {
+            const resultsBody = await getResults(id);
+            setResults(resultsBody);
+          }
+        }
+        return current.status;
+      } catch (err) {
+        stopPolling();
+        setError(err instanceof ApiError ? err.message : "could not check research status");
+        return null;
       }
-
-      if (!RESULTS_STATUSES.has(current.status)) return;
-
-      const body = await fetchJson<ResearchResultsResponse>(
-        `${API_URL}/api/research/${id}/results`,
-        "results fetch failed"
-      );
-      setResults(body.results);
-      setMessage(body.message);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "something went wrong");
-    }
-  }
+    },
+    [stopPolling]
+  );
 
   function startPolling(id: string) {
-    if (pollHandle.current !== null) clearInterval(pollHandle.current);
+    stopPolling();
     pollHandle.current = setInterval(() => {
-      void pollOnce(id);
-    }, POLL_INTERVAL_MS);
+      void applyStatus(id);
+    }, getPollIntervalMs());
   }
 
-  async function submitQuery(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSearch(query: string) {
     setError(null);
     setResults(null);
-    setStatus(null);
-    setResearchId(null);
-
+    setRun(null);
+    setSubmitting(true);
     try {
-      const created = await fetchJson<ResearchCreateResponse>(
-        `${API_URL}/api/research`,
-        "request failed",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
-        }
-      );
-      setResearchId(created.id);
-      setStatus(created.status);
-      startPolling(created.id);
+      const created = await createResearch(query);
+      const status = await applyStatus(created.id);
+      if (status !== null && !STOP_POLLING_STATUSES.has(status)) startPolling(created.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "something went wrong");
+      setError(err instanceof ApiError ? err.message : "could not start this research");
+    } finally {
+      setSubmitting(false);
     }
   }
 
+  async function handleClarify(entityGranularity: EntityType) {
+    if (!run) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await clarifyResearch(run.id, entityGranularity);
+      const status = await applyStatus(run.id);
+      if (status !== null && !STOP_POLLING_STATUSES.has(status)) startPolling(run.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "could not submit that answer");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!run) return;
+    setCancelling(true);
+    try {
+      // The cancel response is itself a full status snapshot (plan §11), so
+      // this applies it directly rather than racing a follow-up poll tick.
+      const current = await cancelResearch(run.id);
+      stopPolling();
+      setRun({
+        id: run.id,
+        status: current.status,
+        message: current.message,
+        statistics: current.statistics,
+        diagnostics: current.diagnostics,
+        clarification: current.clarification,
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "could not cancel this research");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  const isRunning = run !== null && !STOP_POLLING_STATUSES.has(run.status);
+  const awaitingClarification = run !== null && run.status === "needs_clarification" && run.clarification !== null;
+  const showResults = run !== null && results !== null;
+  const showPlainTerminalMessage = run !== null && !isRunning && !awaitingClarification && !showResults;
+
   return (
-    <main style={{ fontFamily: "sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
+    <main className="page">
       <h1>TripFinder</h1>
+      <p className="tagline">Opinion-based travel research, aggregated from real discussions.</p>
 
-      <form onSubmit={submitQuery}>
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="e.g. most underrated US states for nature"
-          style={{ width: "100%", padding: "0.5rem" }}
-          required
+      <SearchForm onSubmit={handleSearch} disabled={submitting || isRunning} />
+
+      {error && <p className="error">{error}</p>}
+
+      {awaitingClarification && run.clarification && (
+        <ClarificationView
+          clarification={run.clarification}
+          onAnswer={handleClarify}
+          submitting={submitting}
         />
-        <button type="submit" style={{ marginTop: "0.5rem" }}>
-          Search
-        </button>
-      </form>
-
-      {error && <p style={{ color: "red" }}>{error}</p>}
-
-      {researchId && (
-        <p>
-          Research <code>{researchId}</code> — status: <strong>{status}</strong>
-        </p>
       )}
 
-      {message && <p>{message}</p>}
-
-      {results && results.length > 0 && (
-        <ol>
-          {results.map((result) => (
-            <li key={result.entity_id}>
-              {result.entity_name} — {result.supporter_count} supporters
-              {/* A suppressed share is shown as withheld, never as 0% (plan §0.1). */}
-              {result.share === null
-                ? ` (of ${result.respondent_pool_size} people; % withheld)`
-                : ` (${Math.round(result.share * 100)}% of ${result.respondent_pool_size})`}
-            </li>
-          ))}
-        </ol>
+      {isRunning && run && (
+        <ProgressView
+          status={run.status}
+          message={run.message}
+          statistics={run.statistics}
+          onCancel={handleCancel}
+          cancelling={cancelling}
+        />
       )}
 
-      {results && results.length === 0 && <p>No results.</p>}
+      {showPlainTerminalMessage && run && (
+        <section className="terminal-state" aria-label="Research outcome">
+          <p>{run.message}</p>
+        </section>
+      )}
+
+      {showResults && run && results && <ResultsView researchId={run.id} data={results} />}
+
+      {run && !isRunning && <DiagnosticsSummary diagnostics={run.diagnostics} />}
     </main>
   );
 }

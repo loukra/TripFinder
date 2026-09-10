@@ -47,3 +47,190 @@ a {
     color-scheme: dark;
   }
 }
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+  width: 100%;
+}
+
+.tagline {
+  color: #666;
+  margin-bottom: 1.5rem;
+}
+
+.search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.search-form input {
+  padding: 0.6rem;
+  font-size: 1rem;
+  border: 1px solid #999;
+  border-radius: 4px;
+}
+
+.search-form button {
+  align-self: flex-start;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.example-queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.example-query {
+  border: 1px solid #ccc;
+  background: transparent;
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  cursor: pointer;
+}
+
+.error {
+  color: #b00020;
+  margin: 0.5rem 0;
+}
+
+.clarification,
+.progress,
+.terminal-state,
+.results {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #ddd;
+}
+
+.clarification-option {
+  display: block;
+  margin: 0.4rem 0;
+}
+
+.status-badge {
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.progress-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+.progress-stat {
+  font-size: 0.85rem;
+}
+
+.progress-stat dt {
+  color: #666;
+  text-transform: capitalize;
+}
+
+.progress-stat dd {
+  font-weight: bold;
+}
+
+.banner-degraded {
+  background: #fff3cd;
+  border: 1px solid #ffe69c;
+  padding: 0.6rem;
+  border-radius: 4px;
+}
+
+.result-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.result-row {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #eee;
+}
+
+.result-header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+
+.result-bar-track {
+  background: #eee;
+  border-radius: 4px;
+  height: 10px;
+  margin: 0.4rem 0;
+  overflow: hidden;
+}
+
+.result-bar-fill {
+  background: #2f6feb;
+  height: 100%;
+}
+
+.result-counts,
+.result-denominator {
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.result-explanation {
+  font-style: italic;
+  margin: 0.4rem 0;
+}
+
+.empty-state {
+  color: #666;
+}
+
+.evidence-panel {
+  margin-top: 0.5rem;
+}
+
+.evidence-panel ul {
+  list-style: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.evidence-panel li {
+  margin: 0.2rem 0;
+  word-break: break-all;
+}
+
+.diagnostics {
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+
+.diagnostics-table th,
+.diagnostics-table td {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+.flag {
+  color: #92400e;
+}

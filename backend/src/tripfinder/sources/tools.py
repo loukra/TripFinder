@@ -2,8 +2,9 @@
 
 The discovery agent never calls a ``SourceAdapter`` directly. This is the
 only thing it can call: a single bounded ``search`` tool. It takes and
-returns nothing but a query string and domain documents — no adapter
-config, retry policy, or credentials ever cross this boundary — and it
+returns nothing but a query string, an optional subreddit to scope it to,
+and domain documents — no adapter config, retry policy, or credentials
+ever cross this boundary — and it
 turns every adapter failure into a structured result instead of a raised
 exception, so one bad query cannot take down the whole discovery loop.
 """
@@ -43,10 +44,10 @@ class SourceSearchTool:
         self._adapter = adapter
         self._limit_per_query = limit_per_query
 
-    async def search(self, query: str) -> SourceSearchResult:
+    async def search(self, query: str, *, subreddit: str | None = None) -> SourceSearchResult:
         try:
             documents: Sequence[SourceDocument] = await self._adapter.search(
-                SourceSearchQuery(query=query, limit=self._limit_per_query)
+                SourceSearchQuery(query=query, subreddit=subreddit, limit=self._limit_per_query)
             )
         except Exception as exc:  # an adapter failure must never crash the discovery loop
             logger.warning("source tool: search %r failed: %s", query, exc)

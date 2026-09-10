@@ -16,10 +16,20 @@ from tripfinder.domain.models import ResearchPlan
 
 
 class DiscoveryTurnResponse(BaseModel):
-    """One agent turn: propose the next query, or stop."""
+    """One agent turn: propose the next query, or stop.
+
+    ``subreddit`` names which of the plan's ``candidate_subreddits`` this
+    query is scoped to. Arctic Shift's live search API rejects a full-text
+    query with no ``subreddit``/``author``/``link_id``/``parent_id`` to scope
+    it (plan §8) - this is how that scope reaches the source, rather than
+    the model trying to encode it into ``next_query`` itself (e.g. a
+    Google-style ``site:reddit.com/r/...`` filter, which Arctic Shift does
+    not parse).
+    """
 
     should_continue: bool
     next_query: str | None = None
+    subreddit: str | None = None
     reasoning: str = Field(min_length=1)
 
 
@@ -43,5 +53,13 @@ def build_discovery_prompt(
         "Propose ONE new search query that is meaningfully different from "
         "every query already searched, or set should_continue=false. Never "
         "propose a query that is substantially the same as one already "
-        "searched."
+        "searched.\n\n"
+        "The search is a literal full-text match over real comment and post "
+        "bodies, not a web search engine: never use site:, boolean OR/AND, "
+        "or any other search-engine syntax in next_query - write it as "
+        "plain keywords a person would use in a sentence. Every query must "
+        "also be scoped: set subreddit to exactly one name from Candidate "
+        "subreddits above (without 'r/'). If none of the candidates fit "
+        "this query, set should_continue=false instead of guessing a "
+        "subreddit."
     )
