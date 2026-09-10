@@ -14,12 +14,12 @@ from typing import Any
 
 from pydantic import HttpUrl
 
-from tripfinder.domain.models import Comment, SourceDocument
+from tripfinder.domain.models import UNKNOWN_USER_ID, Comment, SourceDocument
 
 _DEFAULT_BOT_DENYLIST = {"automoderator"}
 _BOT_SUFFIX_RE = re.compile(r"[-_]bot$", re.IGNORECASE)
 
-DELETED_AUTHOR = "[deleted]"
+DELETED_AUTHOR = UNKNOWN_USER_ID
 
 
 def is_bot_author(author: str, *, denylist: list[str] | None = None) -> bool:

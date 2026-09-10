@@ -83,6 +83,17 @@ class User(BaseModel):
     display_name: str | None = None
 
 
+UNKNOWN_USER_ID = "[deleted]"
+"""The identity a source uses for a deleted or anonymized author.
+
+Every such comment collapses onto this one id, so it cannot be used as a
+deduplication key (plan §4.6 step 9, `PROJECT.md` §16) — doing so would fold
+unrelated people into a single voter. Adapters map deleted/missing authors
+to this value; it lives in ``domain`` because both a source adapter and a
+pipeline step need the same constant to agree on what "unknown" means.
+"""
+
+
 class SourceDocument(BaseModel):
     """A source post/thread (PROJECT.md §7). ``context_type`` is set by triage (plan §4.7)."""
 
