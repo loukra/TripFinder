@@ -11,6 +11,8 @@ from uuid import UUID
 from pydantic import BaseModel, Field, HttpUrl
 
 from tripfinder.domain.models import (
+    ClarificationRequest,
+    EntityType,
     ResearchDiagnostics,
     ResearchFailure,
     ResearchStatus,
@@ -35,6 +37,8 @@ class ResearchStatusResponse(BaseModel):
     statistics: dict[str, int]
     diagnostics: ResearchDiagnostics
     """What the run suppressed and why — exposed, not merely logged (plan §0.1 rule 2)."""
+    clarification: ClarificationRequest | None = None
+    """Set only while ``status`` is ``needs_clarification`` — answer via ``/clarify`` (plan §6)."""
 
 
 class ResultItem(BaseModel):
@@ -99,3 +103,43 @@ class ResearchFailedError(BaseModel):
     status: ResearchStatus
     message: str
     failure: ResearchFailure | None
+
+
+class ResearchNotReadyError(BaseModel):
+    """A research that has not yet reached, or will never reach, a results page.
+
+    Covers every status besides ``source_unavailable`` and ``failed`` (which
+    have their own richer errors above): still running, ``needs_clarification``,
+    ``rejected``, or ``cancelled`` — plan §7.1's "No" column, minus the two
+    that already name their own cause.
+    """
+
+    status: ResearchStatus
+    message: str
+
+
+class ClarifyRequest(BaseModel):
+    """Answers a ``ClarificationRequest`` by picking one offered granularity (plan §6).
+
+    ``allow_grouped`` ("show all tiers, grouped") is not implemented — every
+    prior phase's aggregation produces one ranked list per research, and
+    building the multi-list version is out of this phase's scope.
+    """
+
+    entity_granularity: EntityType
+
+
+class ClarifyResponse(BaseModel):
+    id: UUID
+    status: ResearchStatus
+
+
+class EvidenceResponse(BaseModel):
+    """Paginated evidence permalinks for one ranked entity (plan §11)."""
+
+    entity_id: str
+    entity_name: str
+    total: int
+    limit: int
+    offset: int
+    permalinks: list[HttpUrl]

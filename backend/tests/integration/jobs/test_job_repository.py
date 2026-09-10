@@ -148,6 +148,74 @@ async def test_requeue_stale_recovers_a_crashed_worker_job(
     assert fetched.status == ResearchStatus.PENDING
 
 
+async def test_get_for_research_returns_the_most_recent_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    research = await _create_research(session_factory, make_research)
+    async with session_factory() as session:
+        first_job_id = await JobRepository(session).enqueue(research.id)
+    async with session_factory() as session:
+        second_job_id = await JobRepository(session).enqueue(research.id)
+
+    async with session_factory() as session:
+        job = await JobRepository(session).get_for_research(research.id)
+
+    assert job is not None
+    assert job.id == second_job_id
+    assert job.id != first_job_id
+
+
+async def test_get_for_research_returns_none_when_nothing_was_ever_enqueued(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    research = await _create_research(session_factory, make_research)
+
+    async with session_factory() as session:
+        job = await JobRepository(session).get_for_research(research.id)
+
+    assert job is None
+
+
+async def test_request_cancel_flags_a_claimed_job_without_changing_its_status(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    """Plan §10 Phase 13: flagging a running job does not itself stop it — the worker
+    notices ``cancel_requested_at`` between pipeline steps."""
+    research = await _create_research(session_factory, make_research)
+    async with session_factory() as session:
+        job_id = await JobRepository(session).enqueue(research.id)
+    async with session_factory() as session:
+        await JobRepository(session).claim_next()
+
+    async with session_factory() as session:
+        assert await JobRepository(session).is_cancel_requested(job_id) is False
+
+    async with session_factory() as session:
+        await JobRepository(session).request_cancel(job_id)
+
+    async with session_factory() as session:
+        assert await JobRepository(session).is_cancel_requested(job_id) is True
+        assert await JobRepository(session).get_status(job_id) == "claimed"
+
+
+async def test_mark_cancelled_updates_status(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    research = await _create_research(session_factory, make_research)
+    async with session_factory() as session:
+        job_id = await JobRepository(session).enqueue(research.id)
+
+    async with session_factory() as session:
+        await JobRepository(session).mark_cancelled(job_id)
+
+    async with session_factory() as session:
+        assert await JobRepository(session).get_status(job_id) == "cancelled"
+
+
 async def test_requeue_stale_leaves_recently_claimed_jobs_alone(
     session_factory: async_sessionmaker[AsyncSession],
     make_research: Callable[..., Research],

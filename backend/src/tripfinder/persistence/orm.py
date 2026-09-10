@@ -33,6 +33,9 @@ class ResearchRow(Base):
     results: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     weak_results: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     diagnostics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    clarification: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    pending_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    resume_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class ResearchJobRow(Base):
@@ -45,3 +48,4 @@ class ResearchJobRow(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

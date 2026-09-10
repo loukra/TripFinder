@@ -13,7 +13,7 @@ def main() -> None:
     settings = Settings.from_env()
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
-    asyncio.run(run_worker_loop(session_factory))
+    asyncio.run(run_worker_loop(session_factory, settings=settings))
 
 
 if __name__ == "__main__":

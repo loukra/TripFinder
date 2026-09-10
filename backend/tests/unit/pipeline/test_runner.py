@@ -1,4 +1,6 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -239,3 +241,61 @@ class TestAnLLMProviderFailureEndsTheRun:
 
         with pytest.raises(RuntimeError):
             await runner.run(_context())
+
+
+class TestCancellationBetweenSteps:
+    """Plan §10 Phase 13. Checked between steps only — see ``CancellationCheck``'s docstring
+    in ``runner.py`` for why a step already in flight always finishes first."""
+
+    async def test_a_true_should_cancel_stops_the_run_and_marks_it_cancelled(self) -> None:
+        later = _RecordingStep("later")
+        runner = PipelineRunner(
+            [_SetsStatusStep("first", ResearchStatus.DISCOVERING), later]
+        )
+
+        context = await runner.run(_context(), should_cancel=_always(True))
+
+        assert later.ran is False
+        assert context.research.status is ResearchStatus.CANCELLED
+        assert [event.step_name for event in context.progress] == ["first"]
+
+    async def test_a_false_should_cancel_lets_the_pipeline_continue(self) -> None:
+        later = _RecordingStep("later")
+        runner = PipelineRunner(
+            [_SetsStatusStep("first", ResearchStatus.DISCOVERING), later]
+        )
+
+        await runner.run(_context(), should_cancel=_always(False))
+
+        assert later.ran is True
+
+    async def test_should_cancel_is_never_consulted_once_the_run_already_halted(self) -> None:
+        """A step that already ended the run (rejected, failed...) takes priority —
+        cancellation must not overwrite a status that already explains itself."""
+        calls = 0
+
+        async def _should_cancel() -> bool:
+            nonlocal calls
+            calls += 1
+            return True
+
+        runner = PipelineRunner([_SetsStatusStep("rejects", ResearchStatus.REJECTED)])
+
+        context = await runner.run(_context(), should_cancel=_should_cancel)
+
+        assert context.research.status is ResearchStatus.REJECTED
+        assert calls == 0
+
+    async def test_no_should_cancel_behaves_exactly_as_before(self) -> None:
+        runner = PipelineRunner([_SetsStatusStep("first", ResearchStatus.DISCOVERING)])
+
+        context = await runner.run(_context())
+
+        assert context.research.status is ResearchStatus.DISCOVERING
+
+
+def _always(value: bool) -> Callable[[], Any]:
+    async def _check() -> bool:
+        return value
+
+    return _check

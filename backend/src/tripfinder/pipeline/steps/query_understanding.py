@@ -20,9 +20,13 @@ from tripfinder.analysis.query_understanding import (
     build_query_understanding_prompt,
     granularity_label,
 )
+from tripfinder.domain.config import ResearchBudget
 from tripfinder.domain.models import (
     ClarificationOption,
     ClarificationRequest,
+    EntityType,
+    GranularityConfidence,
+    PendingPlan,
     ResearchPlan,
     ResearchStatus,
 )
@@ -62,8 +66,25 @@ class QueryUnderstandingStep:
         threshold = context.research.research_config.query_understanding.granularity_threshold
 
         if not candidates or candidates[0].confidence < threshold:
-            context.data["clarification_request"] = ClarificationRequest(
+            clarification = ClarificationRequest(
                 question=CLARIFICATION_QUESTION, options=_clarification_options(candidates)
+            )
+            context.data["clarification_request"] = clarification
+            context.research.clarification = clarification
+            context.research.pending_plan = PendingPlan(
+                normalized_query=response.normalized_query,
+                scope=response.scope,
+                topic=response.topic,
+                criteria=response.criteria,
+                seed_queries=response.seed_queries,
+                candidate_subreddits=response.candidate_subreddits,
+                granularity_candidates=[
+                    GranularityConfidence(
+                        entity_granularity=candidate.entity_granularity,
+                        confidence=candidate.confidence,
+                    )
+                    for candidate in candidates
+                ],
             )
             context.research.status = ResearchStatus.NEEDS_CLARIFICATION
             return context
@@ -89,3 +110,38 @@ class QueryUnderstandingStep:
         context.research.normalized_query = plan.normalized_query
         context.research.status = ResearchStatus.DISCOVERING
         return context
+
+
+def build_plan_from_pending(
+    pending: PendingPlan, *, entity_granularity: EntityType, budget: ResearchBudget
+) -> ResearchPlan:
+    """Build the final plan once a clarified research has its granularity (plan §6, Phase 13).
+
+    Reuses exactly what Query Understanding already extracted — no LLM call is
+    re-run to answer a question the model already answered, only the tier
+    ``/clarify`` was asked to settle.
+    """
+    candidate = next(
+        (
+            c
+            for c in pending.granularity_candidates
+            if c.entity_granularity == entity_granularity
+        ),
+        None,
+    )
+    if candidate is None:
+        raise ValueError(f"{entity_granularity} was not among the offered candidates")
+    if pending.scope is None:
+        raise ValueError("Query Understanding returned no scope for this query")
+    if pending.topic is None:
+        raise ValueError("Query Understanding returned no topic for this query")
+    return ResearchPlan(
+        normalized_query=pending.normalized_query,
+        scope=pending.scope,
+        entity_granularity=entity_granularity,
+        granularity_confidence=candidate.confidence,
+        topic=pending.topic,
+        criteria=pending.criteria,
+        seed_queries=pending.seed_queries[: budget.max_search_queries],
+        candidate_subreddits=pending.candidate_subreddits,
+    )
