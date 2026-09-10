@@ -9,6 +9,9 @@ from pydantic import ValidationError
 
 from tripfinder.domain.models import (
     HALTING_STATUSES,
+    EntityResolutionMethod,
+    EntityResolutionOutcome,
+    EntityType,
     Research,
     ResearchDiagnostics,
     ResearchFlag,
@@ -51,6 +54,18 @@ def test_diagnostics_round_trip_through_serialization() -> None:
                 reason="title names Alaska",
                 confidence=1.0,
                 decided_by=TriageDecidedBy.RULE,
+            )
+        ],
+        entity_resolutions=[
+            EntityResolutionOutcome(
+                surface_form="the Last Frontier",
+                entity_type=EntityType.STATE,
+                occurrences=3,
+                entity_id="state:alaska",
+                canonical_name="Alaska",
+                decided_by=EntityResolutionMethod.RULE,
+                confidence=1.0,
+                reason="a known name for Alaska",
             )
         ],
         flags=[ResearchFlag.LOW_POLLING_DOCUMENT_RATIO],
@@ -112,6 +127,36 @@ class TestFlags:
         diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
 
         assert diagnostics.flags == [ResearchFlag.BUDGET_LIMIT_REACHED]
+
+
+class TestEntityResolutionValidation:
+    def _outcome(self, **overrides: object) -> EntityResolutionOutcome:
+        payload: dict[str, object] = {
+            "surface_form": "that one state",
+            "entity_type": "state",
+            "occurrences": 4,
+            "decided_by": "ai",
+            "confidence": 0.2,
+            "reason": "the quote does not say which state is meant",
+        }
+        payload.update(overrides)
+        return EntityResolutionOutcome.model_validate(payload)
+
+    def test_an_unresolved_form_carries_no_entity(self) -> None:
+        """`PROJECT.md` §15's refusal, as data: a name and no merge."""
+        outcome = self._outcome()
+
+        assert outcome.entity_id is None
+        assert outcome.canonical_name is None
+
+    def test_a_form_nobody_wrote_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._outcome(occurrences=0)
+
+    def test_an_outcome_without_a_reason_is_rejected(self) -> None:
+        """A refusal without a reason is exactly the silence plan §0.1 forbids."""
+        with pytest.raises(ValidationError):
+            self._outcome(reason="")
 
 
 class TestSourceHealthValidation:

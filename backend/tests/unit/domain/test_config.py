@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from tripfinder.domain.config import (
+    EntityResolutionConfig,
     ResearchBudget,
     ResearchConfig,
     SourceHealthFloors,
@@ -38,12 +39,18 @@ def test_triage_floor_defaults_match_plan() -> None:
     assert floors.min_polling_document_ratio == 0.15
 
 
+def test_entity_resolution_defaults_never_merge_below_high_confidence() -> None:
+    """`PROJECT.md` §15 — the floor below which nothing is merged at all."""
+    assert EntityResolutionConfig().confidence_threshold == 0.7
+
+
 def test_research_config_composes_all_defaults() -> None:
     config = ResearchConfig()
 
     assert config.budget == ResearchBudget()
     assert config.source_health_floors == SourceHealthFloors()
     assert config.triage_floors == TriageFloors()
+    assert config.entity_resolution == EntityResolutionConfig()
 
 
 def test_research_config_round_trips_through_serialization() -> None:
@@ -75,3 +82,9 @@ def test_source_health_floors_rejects_success_rate_above_one() -> None:
 def test_triage_floors_rejects_negative_ratio() -> None:
     with pytest.raises(ValidationError):
         TriageFloors.model_validate({"min_polling_document_ratio": -0.1})
+
+
+def test_entity_resolution_rejects_a_threshold_above_one() -> None:
+    """A threshold nothing can clear would silently resolve nothing at all."""
+    with pytest.raises(ValidationError):
+        EntityResolutionConfig.model_validate({"confidence_threshold": 1.5})

@@ -190,6 +190,35 @@ class TriageDecision(BaseModel):
     downgraded_for_low_confidence: bool = False
 
 
+class EntityResolutionMethod(StrEnum):
+    """Which half of entity resolution settled a name (plan §4.6 step 8)."""
+
+    RULE = "rule"
+    AI = "ai"
+
+
+class EntityResolutionOutcome(BaseModel):
+    """What became of one surface form the comments used (plan §4.6 step 8).
+
+    One entry per *distinct* way of writing a name, not per mention —
+    ``occurrences`` says how many mentions used it. That keeps the record
+    bounded by vocabulary rather than corpus size while still naming every
+    form the run failed to resolve.
+
+    ``entity_id is None`` is the case `PROJECT.md` §15 is about: the name
+    was **not** merged into anything, and ``reason`` says why not.
+    """
+
+    surface_form: str = Field(min_length=1)
+    entity_type: EntityType
+    occurrences: int = Field(gt=0)
+    entity_id: str | None = None
+    canonical_name: str | None = None
+    decided_by: EntityResolutionMethod
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1)
+
+
 class SourceHealth(BaseModel):
     """Per-adapter call accounting for one research (plan §8.1).
 
@@ -233,6 +262,10 @@ class SuppressionReason(StrEnum):
     PREFILTER_EMPTY_BODY = "prefilter_empty_body"
     ANALYSIS_NO_RESULT = "analysis_no_result"
     ANALYSIS_FABRICATED_QUOTE = "analysis_fabricated_quote"
+    ENTITY_AMBIGUOUS = "entity_ambiguous"
+    ENTITY_UNRESOLVED = "entity_unresolved"
+    ENTITY_OFF_GRANULARITY = "entity_off_granularity"
+    ENTITY_RESOLUTION_NO_RESULT = "entity_resolution_no_result"
 
 
 class Suppression(BaseModel):
@@ -290,6 +323,7 @@ class ResearchDiagnostics(BaseModel):
     source_health: list[SourceHealth] = Field(default_factory=list)
     source_outcome: SourceOutcome | None = None
     triage_decisions: list[TriageDecision] = Field(default_factory=list)
+    entity_resolutions: list[EntityResolutionOutcome] = Field(default_factory=list)
     suppressions: list[Suppression] = Field(default_factory=list)
     flags: list[ResearchFlag] = Field(default_factory=list)
     failure: ResearchFailure | None = None
