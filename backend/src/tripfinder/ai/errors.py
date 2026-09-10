@@ -14,19 +14,19 @@ indistinguishable from a query nobody had an opinion about.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from tripfinder.domain.models import FailureKind
 
 
 class LLMProviderError(Exception):
     """An LLM call did not produce a usable answer.
 
-    Never raised directly — the subclasses below each fix ``kind``, so the
+    Never raised directly — each subclass below fixes ``kind``, so the
     pipeline can always name the cause without inspecting the message.
     """
 
-    def __init__(self, message: str, *, kind: FailureKind) -> None:
-        super().__init__(message)
-        self.kind = kind
+    kind: ClassVar[FailureKind]
 
 
 class LLMCredentialError(LLMProviderError):
@@ -36,8 +36,7 @@ class LLMCredentialError(LLMProviderError):
     and nothing downstream can proceed.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, kind=FailureKind.LLM_CREDENTIAL)
+    kind = FailureKind.LLM_CREDENTIAL
 
 
 class LLMUnavailableError(LLMProviderError):
@@ -47,8 +46,7 @@ class LLMUnavailableError(LLMProviderError):
     nature, and retried inside the provider before this is raised.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, kind=FailureKind.LLM_UNAVAILABLE)
+    kind = FailureKind.LLM_UNAVAILABLE
 
 
 class LLMRequestRejectedError(LLMProviderError):
@@ -58,8 +56,7 @@ class LLMRequestRejectedError(LLMProviderError):
     over a hard limit.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, kind=FailureKind.LLM_REQUEST_REJECTED)
+    kind = FailureKind.LLM_REQUEST_REJECTED
 
 
 class LLMResponseError(LLMProviderError):
@@ -70,5 +67,4 @@ class LLMResponseError(LLMProviderError):
     partial answer is exactly the fabrication `PROJECT.md` §29 forbids.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, kind=FailureKind.LLM_INVALID_RESPONSE)
+    kind = FailureKind.LLM_INVALID_RESPONSE

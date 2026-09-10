@@ -19,8 +19,8 @@ from typing import Any
 
 import httpx2
 import pytest
-from openai import AsyncOpenAI
 
+from builders.openai_provider import STUB_API_KEY, fast_config, json_handler, stubbed_provider
 from builders.openai_responses import refusal_response_body, response_body
 from tripfinder.ai.openai import OpenAIConfig, OpenAIProvider
 from tripfinder.domain.models import (
@@ -41,21 +41,9 @@ from tripfinder.sources.fake.adapter import FakeSourceAdapter
 QUERY = "most underrated US states for nature"
 
 
-def _provider(handler: Callable[[httpx2.Request], httpx2.Response]) -> OpenAIProvider:
-    config = OpenAIConfig(max_retries=0, timeout_seconds=5.0)
-    client = AsyncOpenAI(
-        api_key="test-key-not-a-real-credential",
-        max_retries=config.max_retries,
-        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
-    )
-    return OpenAIProvider(config, client=client)
-
-
-def _responding(status_code: int, body: dict[str, Any]) -> Callable[..., httpx2.Response]:
-    def handler(_: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(status_code, json=body)
-
-    return handler
+def _stubbed(status_code: int, body: dict[str, Any]) -> OpenAIProvider:
+    """The real adapter, answering with ``body`` instead of reaching OpenAI."""
+    return stubbed_provider(json_handler(status_code, body), config=fast_config())
 
 
 def _context(provider: OpenAIProvider) -> PipelineContext:
@@ -77,7 +65,7 @@ async def _run_with_no_credential() -> Research:
 
 async def _run_with_a_rejected_credential() -> Research:
     return await _run_with(
-        _provider(_responding(401, {"error": {"message": "Incorrect API key provided"}}))
+        _stubbed(401, {"error": {"message": "Incorrect API key provided"}})
     )
 
 
@@ -136,15 +124,13 @@ class TestAMissingOrRejectedCredentialFailsTheResearch:
 
         failure = research.diagnostics.failure
         assert failure is not None
-        assert "test-key-not-a-real-credential" not in failure.detail
+        assert STUB_API_KEY not in failure.detail
 
     async def test_a_provider_outage_is_a_different_kind_from_a_credential_problem(
         self,
     ) -> None:
         """Four kinds, four remedies — collapsing them would lose the reason."""
-        research = await _run_with(
-            _provider(_responding(503, {"error": {"message": "overloaded"}}))
-        )
+        research = await _run_with(_stubbed(503, {"error": {"message": "overloaded"}}))
 
         failure = research.diagnostics.failure
         assert failure is not None
@@ -152,17 +138,12 @@ class TestAMissingOrRejectedCredentialFailsTheResearch:
 
     async def test_an_unusable_answer_is_a_failure_not_an_empty_finding(self) -> None:
         """A refusal must not become "nobody recommended anything"."""
-        research = await _run_with(_responding_provider_refusal())
+        research = await _run_with(_stubbed(200, refusal_response_body()))
 
         failure = research.diagnostics.failure
         assert failure is not None
         assert failure.kind is FailureKind.LLM_INVALID_RESPONSE
         assert research.results == []
-
-
-def _responding_provider_refusal() -> OpenAIProvider:
-    return _provider(_responding(200, refusal_response_body()))
-
 
 class TestASuppressedRunIsDistinguishableFromAThinOne:
     """The §0.1 rule-5 test: the two outcomes may never look alike.
@@ -205,6 +186,16 @@ class TestASuppressedRunIsDistinguishableFromAThinOne:
         }
 
 
+class _RecordingStep:
+    name = "later"
+
+    def __init__(self) -> None:
+        self.ran = False
+
+    async def run(self, context: PipelineContext) -> PipelineContext:
+        self.ran = True
+        return context
+
 class TestTheFailureStopsTheRunImmediately:
     async def test_no_later_step_runs_after_a_provider_failure(self) -> None:
         """Plan §7: a terminated research must not go on building output."""
@@ -225,17 +216,6 @@ class TestTheFailureStopsTheRunImmediately:
         assert context.progress[-1].status is ResearchStatus.FAILED
 
 
-class _RecordingStep:
-    name = "later"
-
-    def __init__(self) -> None:
-        self.ran = False
-
-    async def run(self, context: PipelineContext) -> PipelineContext:
-        self.ran = True
-        return context
-
-
 class TestASuccessfulCallStillWorksThroughTheRealAdapter:
     """The control: the same wiring, with the model answering, does not fail."""
 
@@ -251,7 +231,7 @@ class TestASuccessfulCallStillWorksThroughTheRealAdapter:
             "seed_queries": ["underrated states nature"],
             "candidate_subreddits": ["travel"],
         }
-        research = await _run_with(_provider(_responding(200, response_body(answer))))
+        research = await _run_with(_stubbed(200, response_body(answer)))
 
         assert research.status is ResearchStatus.DISCOVERING
         assert research.diagnostics.failure is None
@@ -264,6 +244,6 @@ class TestASuccessfulCallStillWorksThroughTheRealAdapter:
             seen.append(request)
             return httpx2.Response(401, json={"error": {"message": "nope"}})
 
-        await _run_with(_provider(handler))
+        await _run_with(stubbed_provider(handler, config=fast_config()))
 
         assert QUERY in json.loads(seen[0].content)["input"]

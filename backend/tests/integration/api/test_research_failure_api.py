@@ -16,6 +16,7 @@ from collections.abc import Callable
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tripfinder.ai.openai.provider import MISSING_KEY_MESSAGE
 from tripfinder.api.messages import FAILURE_MESSAGES
 from tripfinder.domain.models import (
     FailureKind,
@@ -25,10 +26,8 @@ from tripfinder.domain.models import (
 )
 from tripfinder.persistence.repositories import ResearchRepository
 
-CREDENTIAL_DETAIL = (
-    "no OpenAI API key is configured, so no model call can be made "
-    "(set OPENAI_API_KEY, or LLM_PROVIDER=fake)"
-)
+CREDENTIAL_DETAIL = MISSING_KEY_MESSAGE
+"""What the real provider records when no key is configured, not a stand-in for it."""
 
 
 async def _persist(

@@ -8,19 +8,26 @@ analysis, and an empty analysis is indistinguishable from a question nobody
 had an opinion about.
 
 No test here touches the network: the SDK client is driven through a mock
-transport (see ``conftest.py``).
+transport (see ``builders/openai_provider.py``).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from typing import Any
 
 import httpx2
 import pytest
 from pydantic import BaseModel, SecretStr
 
+from builders.openai_provider import (
+    STUB_API_KEY,
+    Handler,
+    fast_config,
+    json_handler,
+    raising_handler,
+    stubbed_provider,
+)
 from builders.openai_responses import (
     refusal_response_body,
     response_body,
@@ -33,14 +40,9 @@ from tripfinder.ai.errors import (
     LLMResponseError,
     LLMUnavailableError,
 )
-from tripfinder.ai.openai import OpenAIConfig, OpenAIProvider
+from tripfinder.ai.openai import OpenAIProvider
 from tripfinder.domain.models import FailureKind
 from tripfinder.domain.ports import LLMProvider
-
-Handler = Callable[[httpx2.Request], httpx2.Response]
-ProviderFor = Callable[..., OpenAIProvider]
-JsonHandler = Callable[..., Handler]
-FastConfig = Callable[..., OpenAIConfig]
 
 
 class Verdict(BaseModel):
@@ -61,19 +63,17 @@ class TestTheHappyPath:
     def test_satisfies_the_llm_provider_port(self) -> None:
         assert isinstance(OpenAIProvider(), LLMProvider)
 
-    async def test_returns_the_validated_response_model(self, provider_for: ProviderFor) -> None:
-        provider = provider_for(_answering({"verdict": "polling", "confidence": 0.9}))
+    async def test_returns_the_validated_response_model(self) -> None:
+        provider = stubbed_provider(_answering({"verdict": "polling", "confidence": 0.9}))
 
         result = await provider.complete_structured(prompt="classify", response_model=Verdict)
 
         assert result == Verdict(verdict="polling", confidence=0.9)
 
-    async def test_sends_the_configured_model_prompt_and_token_cap(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
+    async def test_sends_the_configured_model_prompt_and_token_cap(self) -> None:
         """Plan §10 Phase 7.5: the model id is config, never a constant in the call."""
         seen: list[httpx2.Request] = []
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(200, response_body({"verdict": "topical", "confidence": 0.1}), seen=seen),
             config=fast_config(model="gpt-5-nano", max_output_tokens=321),
         )
@@ -85,12 +85,10 @@ class TestTheHappyPath:
         assert body["max_output_tokens"] == 321
         assert body["input"] == "classify this"
 
-    async def test_asks_for_the_response_model_as_a_strict_schema(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
+    async def test_asks_for_the_response_model_as_a_strict_schema(self) -> None:
         """`PROJECT.md` demands validated structured output, not free text to parse."""
         seen: list[httpx2.Request] = []
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(200, response_body({"verdict": "polling", "confidence": 0.5}), seen=seen),
             config=fast_config(),
         )
@@ -107,9 +105,7 @@ class TestTheHappyPath:
 class TestACredentialProblemFailsLoudly:
     """Plan §10 Phase 7.5: missing *or* rejected — both must fail the research."""
 
-    async def test_a_missing_key_raises_before_any_request_is_made(
-        self, fast_config: FastConfig
-    ) -> None:
+    async def test_a_missing_key_raises_before_any_request_is_made(self) -> None:
         provider = OpenAIProvider(fast_config(), api_key=None)
 
         with pytest.raises(LLMCredentialError) as caught:
@@ -118,9 +114,7 @@ class TestACredentialProblemFailsLoudly:
         assert caught.value.kind is FailureKind.LLM_CREDENTIAL
         assert "OPENAI_API_KEY" in str(caught.value)
 
-    async def test_an_empty_key_is_the_same_as_a_missing_one(
-        self, fast_config: FastConfig
-    ) -> None:
+    async def test_an_empty_key_is_the_same_as_a_missing_one(self) -> None:
         provider = OpenAIProvider(fast_config(), api_key=SecretStr(""))
 
         with pytest.raises(LLMCredentialError):
@@ -128,13 +122,9 @@ class TestACredentialProblemFailsLoudly:
 
     @pytest.mark.parametrize("status_code", [401, 403])
     async def test_a_rejected_key_raises_the_same_error_as_a_missing_one(
-        self,
-        provider_for: ProviderFor,
-        json_handler: JsonHandler,
-        fast_config: FastConfig,
-        status_code: int,
+        self, status_code: int
     ) -> None:
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(status_code, {"error": {"message": "invalid key"}}),
             config=fast_config(),
         )
@@ -144,30 +134,22 @@ class TestACredentialProblemFailsLoudly:
 
         assert caught.value.kind is FailureKind.LLM_CREDENTIAL
 
-    async def test_the_error_never_repeats_the_key(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
+    async def test_the_error_never_repeats_the_key(self) -> None:
         """A secret in an error message is a secret in the persisted snapshot."""
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(401, {"error": {"message": "invalid key"}}), config=fast_config()
         )
 
         with pytest.raises(LLMCredentialError) as caught:
             await provider.complete_structured(prompt="classify", response_model=Verdict)
 
-        assert "test-key-not-a-real-credential" not in str(caught.value)
+        assert STUB_API_KEY not in str(caught.value)
 
 
 class TestAnUnreachableProviderFailsLoudly:
     @pytest.mark.parametrize("status_code", [429, 500, 503])
-    async def test_a_transient_status_raises_unavailable(
-        self,
-        provider_for: ProviderFor,
-        json_handler: JsonHandler,
-        fast_config: FastConfig,
-        status_code: int,
-    ) -> None:
-        provider = provider_for(
+    async def test_a_transient_status_raises_unavailable(self, status_code: int) -> None:
+        provider = stubbed_provider(
             json_handler(status_code, {"error": {"message": "busy"}}), config=fast_config()
         )
 
@@ -181,26 +163,18 @@ class TestAnUnreachableProviderFailsLoudly:
         [httpx2.ConnectTimeout("timed out"), httpx2.ConnectError("connection refused")],
         ids=["timeout", "connection refused"],
     )
-    async def test_a_transport_failure_raises_unavailable(
-        self,
-        provider_for: ProviderFor,
-        raising_handler: Callable[[Exception], Handler],
-        fast_config: FastConfig,
-        error: Exception,
-    ) -> None:
-        provider = provider_for(raising_handler(error), config=fast_config())
+    async def test_a_transport_failure_raises_unavailable(self, error: Exception) -> None:
+        provider = stubbed_provider(raising_handler(error), config=fast_config())
 
         with pytest.raises(LLMUnavailableError) as caught:
             await provider.complete_structured(prompt="classify", response_model=Verdict)
 
         assert caught.value.kind is FailureKind.LLM_UNAVAILABLE
 
-    async def test_max_retries_is_config_and_is_honoured(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
+    async def test_max_retries_is_config_and_is_honoured(self) -> None:
         """Retry policy is `OpenAIConfig`'s, exactly as it is `ArcticShiftConfig`'s."""
         seen: list[httpx2.Request] = []
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(500, {"error": {"message": "boom"}}, seen=seen),
             config=fast_config(max_retries=2),
         )
@@ -212,10 +186,8 @@ class TestAnUnreachableProviderFailsLoudly:
 
 
 class TestARejectedRequestIsOurBugNotAnOutage:
-    async def test_a_4xx_raises_request_rejected(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
-        provider = provider_for(
+    async def test_a_4xx_raises_request_rejected(self) -> None:
+        provider = stubbed_provider(
             json_handler(400, {"error": {"message": "unknown model"}}), config=fast_config()
         )
 
@@ -224,11 +196,9 @@ class TestARejectedRequestIsOurBugNotAnOutage:
 
         assert caught.value.kind is FailureKind.LLM_REQUEST_REJECTED
 
-    async def test_a_rejected_request_is_not_retried(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
+    async def test_a_rejected_request_is_not_retried(self) -> None:
         seen: list[httpx2.Request] = []
-        provider = provider_for(
+        provider = stubbed_provider(
             json_handler(400, {"error": {"message": "unknown model"}}, seen=seen),
             config=fast_config(max_retries=3),
         )
@@ -242,10 +212,8 @@ class TestARejectedRequestIsOurBugNotAnOutage:
 class TestAnUnusableAnswerIsNeverCoerced:
     """`PROJECT.md` §29: never silently invent evidence — not even by omission."""
 
-    async def test_a_truncated_response_raises_and_names_the_cause(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
-        provider = provider_for(
+    async def test_a_truncated_response_raises_and_names_the_cause(self) -> None:
+        provider = stubbed_provider(
             json_handler(200, truncated_response_body()), config=fast_config()
         )
 
@@ -256,10 +224,8 @@ class TestAnUnusableAnswerIsNeverCoerced:
         assert "cut short" in str(caught.value)
         assert "max_output_tokens" in str(caught.value)
 
-    async def test_a_refusal_raises_and_quotes_it(
-        self, provider_for: ProviderFor, json_handler: JsonHandler, fast_config: FastConfig
-    ) -> None:
-        provider = provider_for(
+    async def test_a_refusal_raises_and_quotes_it(self) -> None:
+        provider = stubbed_provider(
             json_handler(200, refusal_response_body()), config=fast_config()
         )
 
@@ -270,9 +236,9 @@ class TestAnUnusableAnswerIsNeverCoerced:
         assert "I will not answer that." in str(caught.value)
 
     async def test_an_answer_missing_a_field_raises_rather_than_half_filling_the_model(
-        self, provider_for: ProviderFor, fast_config: FastConfig
+        self,
     ) -> None:
-        provider = provider_for(_answering({"verdict": "polling"}), config=fast_config())
+        provider = stubbed_provider(_answering({"verdict": "polling"}), config=fast_config())
 
         with pytest.raises(LLMResponseError) as caught:
             await provider.complete_structured(prompt="classify", response_model=Verdict)

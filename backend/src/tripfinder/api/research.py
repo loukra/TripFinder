@@ -23,11 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.api.dependencies import get_session
-from tripfinder.api.messages import (
-    percentages_suppressed,
-    research_message,
-    status_message,
-)
+from tripfinder.api.messages import percentages_suppressed, research_message
 from tripfinder.api.schemas import (
     ResearchCreateRequest,
     ResearchCreateResponse,
@@ -84,7 +80,7 @@ async def get_research_results(
             status_code=409,
             detail=SourceUnavailableError(
                 status=research.status,
-                message=status_message(research.status),
+                message=research_message(research.status, research.diagnostics.failure),
                 adapters=research.diagnostics.source_health,
             ).model_dump(mode="json"),
         )
@@ -105,7 +101,7 @@ async def get_research_results(
     return ResearchResultsResponse(
         id=research.id,
         status=research.status,
-        message=status_message(research.status),
+        message=research_message(research.status, research.diagnostics.failure),
         percentages_suppressed=suppress_share,
         results=[
             ResultItem.from_domain(result, suppress_share=suppress_share)
