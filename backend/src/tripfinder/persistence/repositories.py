@@ -7,13 +7,22 @@ repeated search creates a new row — ``create`` never overwrites (PROJECT.md
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.domain.config import ResearchConfig
-from tripfinder.domain.models import Research, ResearchDiagnostics, ResearchStatus, Result
+from tripfinder.domain.models import (
+    ClarificationRequest,
+    PendingPlan,
+    Research,
+    ResearchDiagnostics,
+    ResearchPlan,
+    ResearchStatus,
+    Result,
+)
 from tripfinder.persistence.orm import ResearchRow
 
 
@@ -29,6 +38,9 @@ def _to_row(research: Research) -> ResearchRow:
         results=[result.model_dump(mode="json") for result in research.results],
         weak_results=[result.model_dump(mode="json") for result in research.weak_results],
         diagnostics=research.diagnostics.model_dump(mode="json"),
+        clarification=_dump(research.clarification),
+        pending_plan=_dump(research.pending_plan),
+        resume_plan=_dump(research.resume_plan),
     )
 
 
@@ -44,7 +56,22 @@ def _to_domain(row: ResearchRow) -> Research:
         results=[Result.model_validate(result) for result in row.results],
         weak_results=[Result.model_validate(result) for result in row.weak_results],
         diagnostics=ResearchDiagnostics.model_validate(row.diagnostics),
+        clarification=_load(ClarificationRequest, row.clarification),
+        pending_plan=_load(PendingPlan, row.pending_plan),
+        resume_plan=_load(ResearchPlan, row.resume_plan),
     )
+
+
+def _dump(
+    model: ClarificationRequest | PendingPlan | ResearchPlan | None,
+) -> dict[str, Any] | None:
+    return model.model_dump(mode="json") if model is not None else None
+
+
+def _load[T: (ClarificationRequest, PendingPlan, ResearchPlan)](
+    model_type: type[T], value: dict[str, Any] | None
+) -> T | None:
+    return model_type.model_validate(value) if value is not None else None
 
 
 class ResearchNotFoundError(LookupError):
@@ -74,6 +101,9 @@ class ResearchRepository:
         row.results = [result.model_dump(mode="json") for result in research.results]
         row.weak_results = [result.model_dump(mode="json") for result in research.weak_results]
         row.diagnostics = research.diagnostics.model_dump(mode="json")
+        row.clarification = _dump(research.clarification)
+        row.pending_plan = _dump(research.pending_plan)
+        row.resume_plan = _dump(research.resume_plan)
         await self._session.commit()
 
     async def list_all(self) -> list[Research]:

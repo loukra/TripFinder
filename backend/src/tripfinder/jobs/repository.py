@@ -1,9 +1,16 @@
-"""Postgres-backed job queue (plan §1 — no Redis; plan §10 Phase 3).
+"""Postgres-backed job queue (plan §1 — no Redis; plan §10 Phase 3, cancellation Phase 13).
 
 ``claim_next`` uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so multiple worker
 processes can poll the same table without double-claiming a job.
 ``requeue_stale`` is what makes a worker crash recoverable: a job left
 ``claimed`` past a deadline is handed back to the queue rather than lost.
+
+Cancellation (plan §10 Phase 13) has two paths, chosen by where a job is when
+the request arrives. A ``pending`` job has no worker looking at it yet, so
+the API cancels it outright. A ``claimed`` job may already be mid-run, and
+nothing here can interrupt a step in flight (plan §7, ``PipelineRunner``'s
+``should_cancel`` docstring) — ``cancel_requested_at`` only flags it, and the
+worker notices between steps.
 """
 
 from __future__ import annotations
@@ -22,10 +29,15 @@ from tripfinder.persistence.orm import ResearchJobRow
 class Job:
     id: UUID
     research_id: UUID
+    status: str = "claimed"
 
 
 class JobNotFoundError(LookupError):
     """Raised when finishing a job id that was never enqueued."""
+
+
+def _to_job(row: ResearchJobRow) -> Job:
+    return Job(id=row.id, research_id=row.research_id, status=row.status)
 
 
 class JobRepository:
@@ -59,7 +71,7 @@ class JobRepository:
         row.status = "claimed"
         row.claimed_at = datetime.now(UTC)
         await self._session.commit()
-        return Job(id=row.id, research_id=row.research_id)
+        return _to_job(row)
 
     async def mark_succeeded(self, job_id: UUID) -> None:
         row = await self._get_or_raise(job_id)
@@ -74,9 +86,36 @@ class JobRepository:
         row.error = error
         await self._session.commit()
 
+    async def mark_cancelled(self, job_id: UUID) -> None:
+        row = await self._get_or_raise(job_id)
+        row.status = "cancelled"
+        row.finished_at = datetime.now(UTC)
+        await self._session.commit()
+
+    async def request_cancel(self, job_id: UUID) -> None:
+        """Flag a ``claimed`` job for cancellation; the worker notices between steps."""
+        row = await self._get_or_raise(job_id)
+        row.cancel_requested_at = datetime.now(UTC)
+        await self._session.commit()
+
+    async def is_cancel_requested(self, job_id: UUID) -> bool:
+        row = await self._get_or_raise(job_id)
+        return row.cancel_requested_at is not None
+
     async def get_status(self, job_id: UUID) -> str:
         row = await self._get_or_raise(job_id)
         return row.status
+
+    async def get_for_research(self, research_id: UUID) -> Job | None:
+        """The most recent job enqueued for this research, if any."""
+        stmt = (
+            select(ResearchJobRow)
+            .where(ResearchJobRow.research_id == research_id)
+            .order_by(ResearchJobRow.created_at.desc())
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _to_job(row) if row is not None else None
 
     async def requeue_stale(self, *, older_than: timedelta) -> int:
         """Reset jobs still ``claimed`` past the deadline back to ``pending``."""

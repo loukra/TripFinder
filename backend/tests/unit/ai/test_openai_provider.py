@@ -249,7 +249,12 @@ class TestAnUnusableAnswerIsNeverCoerced:
 
 class TestEveryFailureNamesItsKind:
     def test_all_provider_errors_carry_a_failure_kind(self) -> None:
-        """The pipeline reads `.kind` off whatever it catches — none may lack one."""
+        """The pipeline reads `.kind` off whatever it catches — none may lack one.
+
+        ``FailureKind.UNEXPECTED_ERROR`` (plan §10 Phase 13) is deliberately
+        excluded: it names a non-LLM failure the worker's own error contract
+        catches, not something any ``LLMProviderError`` subclass raises.
+        """
         errors: list[LLMProviderError] = [
             LLMCredentialError("no key"),
             LLMUnavailableError("timeout"),
@@ -257,4 +262,4 @@ class TestEveryFailureNamesItsKind:
             LLMResponseError("refused"),
         ]
 
-        assert {error.kind for error in errors} == set(FailureKind)
+        assert {error.kind for error in errors} == set(FailureKind) - {FailureKind.UNEXPECTED_ERROR}

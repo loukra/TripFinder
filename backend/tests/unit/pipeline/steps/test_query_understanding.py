@@ -15,13 +15,18 @@ from tripfinder.domain.models import (
     Comment,
     EntityType,
     GeoScope,
+    GranularityConfidence,
+    PendingPlan,
     Research,
     ResearchStatus,
     SourceDocument,
 )
 from tripfinder.domain.ports import SourceSearchQuery
 from tripfinder.pipeline.base import PipelineContext
-from tripfinder.pipeline.steps.query_understanding import QueryUnderstandingStep
+from tripfinder.pipeline.steps.query_understanding import (
+    QueryUnderstandingStep,
+    build_plan_from_pending,
+)
 
 
 class _ForbiddenSourceAdapter:
@@ -233,3 +238,120 @@ async def test_confident_response_missing_topic_raises_instead_of_guessing() -> 
 
     with pytest.raises(ValueError, match="topic"):
         await QueryUnderstandingStep().run(_context(response))
+
+
+async def test_an_ambiguous_query_persists_a_pending_plan_and_clarification_on_research() -> None:
+    """Plan §6, Phase 13: this is what survives the gap until ``/clarify`` answers it."""
+    response = QueryUnderstandingResponse(
+        is_travel_recommendation_query=True,
+        normalized_query="most underrated us destinations for nature",
+        scope=GeoScope(type="country", value="United States"),
+        topic="nature",
+        criteria=["underrated"],
+        granularity_candidates=[
+            EntityGranularityCandidate(entity_granularity=EntityType.STATE, confidence=0.5),
+            EntityGranularityCandidate(entity_granularity=EntityType.PARK, confidence=0.45),
+        ],
+        seed_queries=["underrated us nature"],
+        candidate_subreddits=["travel"],
+    )
+
+    context = await QueryUnderstandingStep().run(_context(response))
+
+    research = context.research
+    assert research.clarification is context.data["clarification_request"]
+    pending = research.pending_plan
+    assert pending is not None
+    assert pending.normalized_query == "most underrated us destinations for nature"
+    assert pending.scope == GeoScope(type="country", value="United States")
+    assert pending.topic == "nature"
+    assert pending.criteria == ["underrated"]
+    assert pending.seed_queries == ["underrated us nature"]
+    assert pending.candidate_subreddits == ["travel"]
+    assert [c.entity_granularity for c in pending.granularity_candidates] == [
+        EntityType.STATE,
+        EntityType.PARK,
+    ]
+
+
+async def test_a_confident_query_does_not_persist_clarification_state() -> None:
+    response = QueryUnderstandingResponse(
+        is_travel_recommendation_query=True,
+        normalized_query="underrated us states",
+        scope=GeoScope(type="country", value="United States"),
+        topic="nature",
+        granularity_candidates=[
+            EntityGranularityCandidate(entity_granularity=EntityType.STATE, confidence=0.9)
+        ],
+    )
+
+    context = await QueryUnderstandingStep().run(_context(response))
+
+    assert context.research.clarification is None
+    assert context.research.pending_plan is None
+
+
+class TestBuildPlanFromPending:
+    """The other half of the resumption story — ``/clarify`` calls this directly, without
+    re-running the LLM call that already produced ``PendingPlan``."""
+
+    def _pending(self, **overrides: object) -> PendingPlan:
+        defaults: dict[str, object] = dict(
+            normalized_query="underrated us destinations for nature",
+            scope=GeoScope(type="country", value="United States"),
+            topic="nature",
+            criteria=["underrated"],
+            seed_queries=["q1", "q2", "q3"],
+            candidate_subreddits=["travel"],
+            granularity_candidates=[
+                GranularityConfidence(entity_granularity=EntityType.STATE, confidence=0.5),
+                GranularityConfidence(entity_granularity=EntityType.PARK, confidence=0.45),
+            ],
+        )
+        defaults.update(overrides)
+        return PendingPlan(**defaults)  # type: ignore[arg-type]
+
+    def test_builds_a_plan_using_the_chosen_candidates_confidence(self) -> None:
+        plan = build_plan_from_pending(
+            self._pending(),
+            entity_granularity=EntityType.PARK,
+            budget=ResearchBudget(),
+        )
+
+        assert plan.entity_granularity == EntityType.PARK
+        assert plan.granularity_confidence == 0.45
+        assert plan.normalized_query == "underrated us destinations for nature"
+        assert plan.criteria == ["underrated"]
+
+    def test_seed_queries_are_truncated_to_the_budget(self) -> None:
+        plan = build_plan_from_pending(
+            self._pending(),
+            entity_granularity=EntityType.STATE,
+            budget=ResearchBudget(max_search_queries=2),
+        )
+
+        assert plan.seed_queries == ["q1", "q2"]
+
+    def test_a_granularity_that_was_never_offered_raises(self) -> None:
+        with pytest.raises(ValueError, match="town"):
+            build_plan_from_pending(
+                self._pending(),
+                entity_granularity=EntityType.TOWN,
+                budget=ResearchBudget(),
+            )
+
+    def test_a_missing_scope_raises_instead_of_guessing(self) -> None:
+        with pytest.raises(ValueError, match="scope"):
+            build_plan_from_pending(
+                self._pending(scope=None),
+                entity_granularity=EntityType.STATE,
+                budget=ResearchBudget(),
+            )
+
+    def test_a_missing_topic_raises_instead_of_guessing(self) -> None:
+        with pytest.raises(ValueError, match="topic"):
+            build_plan_from_pending(
+                self._pending(topic=None),
+                entity_granularity=EntityType.STATE,
+                budget=ResearchBudget(),
+            )

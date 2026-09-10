@@ -168,6 +168,31 @@ class ClarificationRequest(BaseModel):
     allow_grouped: bool = True
 
 
+class GranularityConfidence(BaseModel):
+    """One tier Query Understanding considered plausible, with its confidence (plan §6)."""
+
+    entity_granularity: EntityType
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class PendingPlan(BaseModel):
+    """What Query Understanding learned before confidence fell short of a plan (plan §6).
+
+    Not user-facing — ``ClarificationRequest`` is what the API shows. This is
+    persisted so ``POST /research/{id}/clarify`` can build the final
+    ``ResearchPlan`` once the user picks a granularity, without re-running the
+    LLM call that already answered everything except which tier to target.
+    """
+
+    normalized_query: str = Field(min_length=1)
+    scope: GeoScope | None = None
+    topic: str | None = None
+    criteria: list[str] = Field(default_factory=list)
+    seed_queries: list[str] = Field(default_factory=list)
+    candidate_subreddits: list[str] = Field(default_factory=list)
+    granularity_candidates: list[GranularityConfidence] = Field(default_factory=list)
+
+
 class TriageVerdict(StrEnum):
     """Document Triage's three outcomes (plan §4.7)."""
 
@@ -312,6 +337,11 @@ class FailureKind(StrEnum):
     LLM_UNAVAILABLE = "llm_unavailable"
     LLM_REQUEST_REJECTED = "llm_request_rejected"
     LLM_INVALID_RESPONSE = "llm_invalid_response"
+    UNEXPECTED_ERROR = "unexpected_error"
+    """A non-LLM exception the worker caught (plan §10 Phase 13's error contract) — the
+    mirror of the LLM failures above for everything ``PipelineRunner`` does not itself
+    convert. Without this, a crashing step left the research stuck at ``pending`` forever
+    (plan §0.1: a failure must never masquerade as a finding — here, as a queued one)."""
 
 
 class ResearchFailure(BaseModel):
@@ -412,6 +442,16 @@ class Research(BaseModel):
     rather than discarded (plan §4.4 "may appear in a separate weaker
     signals section") — nothing computed here is silently dropped."""
     diagnostics: ResearchDiagnostics = Field(default_factory=ResearchDiagnostics)
+    clarification: ClarificationRequest | None = None
+    """Set only while ``status`` is ``needs_clarification`` — the question the API shows
+    the user (plan §6). The API layer reads this; it does not derive it from ``pending_plan``."""
+    pending_plan: PendingPlan | None = None
+    """Not user-facing. What Query Understanding learned before it asked for clarification;
+    ``POST /research/{id}/clarify`` uses it to build the final plan (plan §6)."""
+    resume_plan: ResearchPlan | None = None
+    """Set only when a clarified research is queued to resume mid-pipeline (plan §6): the
+    worker seeds it straight into the resumed run's context and skips Query Understanding
+    and Preflight entirely, since both already ran before the research paused."""
 
 
 HALTING_STATUSES: frozenset[ResearchStatus] = frozenset(

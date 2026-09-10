@@ -72,6 +72,11 @@ FAILURE_MESSAGES: dict[FailureKind, str] = {
         "did not match the shape this research requires. Rather than guess at the missing "
         "parts, the run was stopped, so there is nothing to show."
     ),
+    FailureKind.UNEXPECTED_ERROR: (
+        "This research hit an unexpected internal error and was stopped before finishing. "
+        "That is a defect in the system running it, not a shortage of opinions — nothing "
+        "here reflects what the source does or doesn't say."
+    ),
 }
 """Plan §0.1 rule 3 applied to a broken run: every failure names its own cause.
 
