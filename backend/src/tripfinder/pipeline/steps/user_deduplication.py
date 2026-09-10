@@ -55,12 +55,9 @@ class UserDeduplicationStep:
         plan: ResearchPlan = context.data["plan"]
         comments_by_id = {comment.id: comment for comment in context.data.get("comments", [])}
         analyses_by_id = {
-            analysis.comment_id: analysis
-            for analysis in context.data.get("comment_analyses", [])
+            analysis.comment_id: analysis for analysis in context.data.get("comment_analyses", [])
         }
-        counted_resolutions: Sequence[ResolvedMention] = context.data.get(
-            "counted_resolutions", []
-        )
+        counted_resolutions: Sequence[ResolvedMention] = context.data.get("counted_resolutions", [])
         evidence_resolutions: Sequence[ResolvedMention] = context.data.get(
             "evidence_resolutions", []
         )
@@ -146,22 +143,18 @@ def _deduplicate(opinions: Sequence[Opinion]) -> tuple[list[Opinion], list[Opini
     (plan §4.3's tiebreak philosophy) rather than dependent on input order.
     """
     groups: dict[_DedupKey, list[Opinion]] = {}
-    order: list[_DedupKey] = []
     kept: list[Opinion] = []
 
     for opinion in opinions:
         key = _dedup_key(opinion)
         if key is None:
             kept.append(opinion)
-            continue
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(opinion)
+        else:
+            groups.setdefault(key, []).append(opinion)
 
     superseded: list[Opinion] = []
-    for key in order:
-        group = sorted(groups[key], key=lambda o: (-o.confidence, o.comment_id))
-        kept.append(group[0])
-        superseded.extend(group[1:])
+    for group in groups.values():
+        ranked = sorted(group, key=lambda o: (-o.confidence, o.comment_id))
+        kept.append(ranked[0])
+        superseded.extend(ranked[1:])
     return kept, superseded
