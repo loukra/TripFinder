@@ -157,6 +157,138 @@ class ClarificationRequest(BaseModel):
     allow_grouped: bool = True
 
 
+class TriageVerdict(StrEnum):
+    """Document Triage's three outcomes (plan §4.7)."""
+
+    POLLING = "polling"
+    TOPICAL = "topical"
+    EXCLUDE = "exclude"
+
+
+class TriageDecidedBy(StrEnum):
+    """Which half of triage decided — rules short-circuit the AI call (plan §4.7)."""
+
+    RULE = "rule"
+    AI = "ai"
+
+
+class TriageDecision(BaseModel):
+    """One document's verdict *and its reason* (plan §4.7 mitigation 1).
+
+    Persisted for every triaged document, so a thin result is always
+    explainable rather than merely thin (plan §0.1).
+    """
+
+    document_id: str = Field(min_length=1)
+    verdict: TriageVerdict
+    reason: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    decided_by: TriageDecidedBy
+    scope_match: bool = True
+    granularity_match: bool = True
+    criterion_match: bool = True
+    downgraded_for_low_confidence: bool = False
+
+
+class SourceHealth(BaseModel):
+    """Per-adapter call accounting for one research (plan §8.1).
+
+    Persisted into the snapshot so a degraded run can always name the
+    adapter and failure kind that degraded it.
+    """
+
+    adapter: str = Field(min_length=1)
+    calls_attempted: int = Field(ge=0)
+    calls_succeeded: int = Field(ge=0)
+    calls_failed: int = Field(ge=0)
+    failure_kinds: dict[str, int] = Field(default_factory=dict)
+    success_rate: float = Field(ge=0.0, le=1.0)
+
+
+class SourceOutcome(StrEnum):
+    """The §8.1 outcome rules' verdict on whether the corpus can be trusted."""
+
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+
+
+class SuppressionReason(StrEnum):
+    """The fixed vocabulary of ways this pipeline drops evidence (plan §0.1 rule 1).
+
+    Every value names a decision the system made *about* the corpus. A
+    reason that reaches the API lets the user tell "we did not look" apart
+    from "there was nothing to find".
+    """
+
+    TRIAGE_TOO_FEW_COMMENTS = "triage_too_few_comments"
+    TRIAGE_TOO_OLD = "triage_too_old"
+    TRIAGE_EXCLUDED = "triage_excluded"
+    TRIAGE_NOT_POLLING = "triage_not_polling"
+    TRIAGE_NO_VERDICT = "triage_no_verdict"
+    BUDGET_MAX_TOTAL_POSTS = "budget_max_total_posts"
+    BUDGET_MAX_COMMENTS = "budget_max_comments"
+    BUDGET_MAX_AI_ANALYSIS_ITEMS = "budget_max_ai_analysis_items"
+    RETRIEVAL_SOURCE_FAILURE = "retrieval_source_failure"
+    DUPLICATE_COMMENT = "duplicate_comment"
+    PREFILTER_TOO_SHORT = "prefilter_too_short"
+    PREFILTER_EMPTY_BODY = "prefilter_empty_body"
+
+
+class Suppression(BaseModel):
+    """A count of evidence dropped by one step for one reason (plan §0.1 rule 1)."""
+
+    step: str = Field(min_length=1)
+    reason: SuppressionReason
+    count: int = Field(ge=0)
+    detail: str | None = None
+
+
+class ResearchFlag(StrEnum):
+    """Conditions that make a result set worth questioning (plan §4.7 mitigation 3)."""
+
+    LOW_POLLING_DOCUMENT_RATIO = "low_polling_document_ratio"
+    BUDGET_LIMIT_REACHED = "budget_limit_reached"
+
+
+class ResearchDiagnostics(BaseModel):
+    """Everything §0.1 requires a research to be able to explain about itself.
+
+    Not debug output: this is the evidence trail that keeps a suppressed run
+    distinguishable from a genuinely thin one, and it is exposed through the
+    API rather than left in the logs.
+    """
+
+    source_health: list[SourceHealth] = Field(default_factory=list)
+    source_outcome: SourceOutcome | None = None
+    triage_decisions: list[TriageDecision] = Field(default_factory=list)
+    suppressions: list[Suppression] = Field(default_factory=list)
+    flags: list[ResearchFlag] = Field(default_factory=list)
+
+    def record_suppression(
+        self,
+        *,
+        step: str,
+        reason: SuppressionReason,
+        count: int,
+        detail: str | None = None,
+    ) -> None:
+        """Append a suppression, coalescing repeats of the same step+reason+detail."""
+        if count <= 0:
+            return
+        for existing in self.suppressions:
+            if existing.step == step and existing.reason == reason and existing.detail == detail:
+                existing.count += count
+                return
+        self.suppressions.append(
+            Suppression(step=step, reason=reason, count=count, detail=detail)
+        )
+
+    def raise_flag(self, flag: ResearchFlag) -> None:
+        if flag not in self.flags:
+            self.flags.append(flag)
+
+
 class Result(BaseModel):
     """One ranked entity in a completed research (PROJECT.md §7, plan §4)."""
 
@@ -183,3 +315,26 @@ class Research(BaseModel):
     research_config: ResearchConfig = Field(default_factory=ResearchConfig)
     statistics: dict[str, int] = Field(default_factory=dict)
     results: list[Result] = Field(default_factory=list)
+    diagnostics: ResearchDiagnostics = Field(default_factory=ResearchDiagnostics)
+
+
+HALTING_STATUSES: frozenset[ResearchStatus] = frozenset(
+    {
+        ResearchStatus.NEEDS_CLARIFICATION,
+        ResearchStatus.REJECTED,
+        ResearchStatus.SOURCE_UNAVAILABLE,
+        ResearchStatus.FAILED,
+        ResearchStatus.CANCELLED,
+    }
+)
+"""States from which no further pipeline step may run (plan §7).
+
+``source_unavailable`` is here for the reason §8.1 gives: once every adapter
+has failed there is no evidence, so continuing would only build a results
+object that must not exist.
+"""
+
+
+def is_halting(status: ResearchStatus) -> bool:
+    """Whether the pipeline must stop rather than run its remaining steps."""
+    return status in HALTING_STATUSES

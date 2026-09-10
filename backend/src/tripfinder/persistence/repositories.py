@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.domain.config import ResearchConfig
-from tripfinder.domain.models import Research, ResearchStatus, Result
+from tripfinder.domain.models import Research, ResearchDiagnostics, ResearchStatus, Result
 from tripfinder.persistence.orm import ResearchRow
 
 
@@ -27,6 +27,7 @@ def _to_row(research: Research) -> ResearchRow:
         research_config=research.research_config.model_dump(mode="json"),
         statistics=research.statistics,
         results=[result.model_dump(mode="json") for result in research.results],
+        diagnostics=research.diagnostics.model_dump(mode="json"),
     )
 
 
@@ -40,6 +41,7 @@ def _to_domain(row: ResearchRow) -> Research:
         research_config=ResearchConfig.model_validate(row.research_config),
         statistics=row.statistics,
         results=[Result.model_validate(result) for result in row.results],
+        diagnostics=ResearchDiagnostics.model_validate(row.diagnostics),
     )
 
 
@@ -68,6 +70,7 @@ class ResearchRepository:
         row.status = research.status.value
         row.statistics = research.statistics
         row.results = [result.model_dump(mode="json") for result in research.results]
+        row.diagnostics = research.diagnostics.model_dump(mode="json")
         await self._session.commit()
 
     async def list_all(self) -> list[Research]:

@@ -4,6 +4,11 @@ Only what the walking skeleton needs: submit a query, poll its status, read
 its results once complete. The full contract (clarify, evidence, cancel) is
 plan §11 / Phase 13 — later phases add it as the pipeline steps it depends on
 land.
+
+Two §8.1 obligations are enforced at this boundary rather than left to the
+frontend, because they are promises about what a number means: a
+``source_unavailable`` research has no results object at all, and a
+``completed_degraded`` one has no percentages.
 """
 
 from __future__ import annotations
@@ -16,11 +21,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.api.dependencies import get_session
+from tripfinder.api.messages import percentages_suppressed, status_message
 from tripfinder.api.schemas import (
     ResearchCreateRequest,
     ResearchCreateResponse,
     ResearchResultsResponse,
     ResearchStatusResponse,
+    ResultItem,
+    SourceUnavailableError,
 )
 from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.jobs.repository import JobRepository
@@ -49,7 +57,11 @@ async def create_research(
 async def get_research(research_id: UUID, session: SessionDep) -> ResearchStatusResponse:
     research = await _get_or_404(research_id, session)
     return ResearchStatusResponse(
-        id=research.id, status=research.status, statistics=research.statistics
+        id=research.id,
+        status=research.status,
+        message=status_message(research.status),
+        statistics=research.statistics,
+        diagnostics=research.diagnostics,
     )
 
 
@@ -58,8 +70,28 @@ async def get_research_results(
     research_id: UUID, session: SessionDep
 ) -> ResearchResultsResponse:
     research = await _get_or_404(research_id, session)
+    if research.status is ResearchStatus.SOURCE_UNAVAILABLE:
+        # §8.1 rule 1: every adapter failed, so there is no evidence and no
+        # results object — only an error naming the adapters that failed.
+        raise HTTPException(
+            status_code=409,
+            detail=SourceUnavailableError(
+                status=research.status,
+                message=status_message(research.status),
+                adapters=research.diagnostics.source_health,
+            ).model_dump(mode="json"),
+        )
+
+    suppress_share = percentages_suppressed(research.status)
     return ResearchResultsResponse(
-        id=research.id, status=research.status, results=research.results
+        id=research.id,
+        status=research.status,
+        message=status_message(research.status),
+        percentages_suppressed=suppress_share,
+        results=[
+            ResultItem.from_domain(result, suppress_share=suppress_share)
+            for result in research.results
+        ],
     )
 
 

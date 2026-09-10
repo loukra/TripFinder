@@ -37,7 +37,7 @@ type Result = {
   entity_id: string;
   entity_name: string;
   supporter_count: number;
-  share: number;
+  share: number | null;
   respondent_pool_size: number;
   discussion_count: number;
   weighted_score: number;
@@ -47,6 +47,8 @@ type Result = {
 type ResearchResultsResponse = {
   id: string;
   status: string;
+  message: string;
+  percentages_suppressed: boolean;
   results: Result[];
 };
 
@@ -61,6 +63,7 @@ export default function Home() {
   const [researchId, setResearchId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [results, setResults] = useState<Result[] | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -92,6 +95,7 @@ export default function Home() {
         "results fetch failed"
       );
       setResults(body.results);
+      setMessage(body.message);
     } catch (err) {
       setError(err instanceof Error ? err.message : "something went wrong");
     }
@@ -154,12 +158,17 @@ export default function Home() {
         </p>
       )}
 
+      {message && <p>{message}</p>}
+
       {results && results.length > 0 && (
         <ol>
           {results.map((result) => (
             <li key={result.entity_id}>
-              {result.entity_name} — {result.supporter_count} supporters (
-              {Math.round(result.share * 100)}% of {result.respondent_pool_size})
+              {result.entity_name} — {result.supporter_count} supporters
+              {/* A suppressed share is shown as withheld, never as 0% (plan §0.1). */}
+              {result.share === null
+                ? ` (of ${result.respondent_pool_size} people; % withheld)`
+                : ` (${Math.round(result.share * 100)}% of ${result.respondent_pool_size})`}
             </li>
           ))}
         </ol>

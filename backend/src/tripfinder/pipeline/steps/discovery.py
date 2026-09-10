@@ -19,6 +19,8 @@ import re
 from tripfinder.analysis.discovery import DiscoveryTurnResponse, build_discovery_prompt
 from tripfinder.domain.models import ResearchPlan, ResearchStatus, SourceDocument
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.health import get_recorder
+from tripfinder.sources.failures import UNKNOWN_FAILURE_KIND
 from tripfinder.sources.tools import SourceSearchTool
 
 _DUPLICATE_JACCARD_THRESHOLD = 0.7
@@ -60,6 +62,9 @@ class AgenticDiscoveryStep:
         issued_queries: list[str] = []
         documents: dict[str, SourceDocument] = {}
         consecutive_duplicate_turns = 0
+        # Discovery searches are source calls like any other, so they count
+        # toward the §8.1 accounting the health assessment reads later.
+        recorder = get_recorder(context)
 
         while len(issued_queries) < budget.max_search_queries:
             turn = await context.llm.complete_structured(
@@ -81,6 +86,12 @@ class AgenticDiscoveryStep:
             consecutive_duplicate_turns = 0
             result = await tool.search(turn.next_query)
             issued_queries.append(turn.next_query)
+            if result.ok:
+                recorder.record_success(context.source.name)
+            else:
+                recorder.record_failure(
+                    context.source.name, kind=result.failure_kind or UNKNOWN_FAILURE_KIND
+                )
             for document in result.documents:
                 documents[document.id] = document
 

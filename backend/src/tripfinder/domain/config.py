@@ -44,6 +44,17 @@ class QueryUnderstandingConfig(BaseModel):
     granularity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
+class PrefilterConfig(BaseModel):
+    """Cheap pre-filtering heuristics (plan §4.6 step 6).
+
+    Deliberately only measures substance, never topic: dropping comments for
+    not matching keywords is exactly the over-strict filter plan §0.1 warns
+    about, and semantic relevance is the §5 analysis call's job.
+    """
+
+    min_comment_characters: int = Field(default=40, ge=0)
+
+
 class ResearchConfig(BaseModel):
     """The full configuration a research run persists (PROJECT.md §21)."""
 
@@ -51,3 +62,4 @@ class ResearchConfig(BaseModel):
     source_health_floors: SourceHealthFloors = Field(default_factory=SourceHealthFloors)
     triage_floors: TriageFloors = Field(default_factory=TriageFloors)
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
+    prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
