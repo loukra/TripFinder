@@ -44,6 +44,21 @@ CREATED_AT = datetime(2026, 6, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
+class LabeledMention:
+    """The one place a fixture comment recommends, read correctly."""
+
+    raw_text: str
+    """The surface form, verbatim from the body — often a nickname."""
+
+    entity: str
+    """The canonical name a correct reading arrives at, verbatim or not."""
+
+    entity_type: EntityType
+    quote: str
+    """A verbatim span of the body that supports the mention."""
+
+
+@dataclass(frozen=True)
 class LabeledComment:
     """One fixture comment: its text, its label, and the answer it deserves."""
 
@@ -51,13 +66,9 @@ class LabeledComment:
     label: str
     user_id: str
     body: str
-    quote: str | None
-    raw_text: str | None
-    entity: str | None
-    entity_type: EntityType | None
     expect_relevant: bool
     expect_positive: bool
-    expect_entities: tuple[str, ...]
+    mention: LabeledMention | None
 
     def as_comment(self, *, document_id: str = "d-polling") -> Comment:
         return Comment(
@@ -82,23 +93,18 @@ class LabeledComment:
         )
 
     def _mentions(self) -> list[EntityMention]:
-        if self.entity is None or self.quote is None or self.raw_text is None:
+        if self.mention is None:
             return []
         return [
             EntityMention(
-                raw_text=self.raw_text,
-                normalized_guess=self.entity,
-                entity_type=self.entity_type or EntityType.OTHER,
+                raw_text=self.mention.raw_text,
+                normalized_guess=self.mention.entity,
+                entity_type=self.mention.entity_type,
                 stance=Stance.POSITIVE if self.expect_positive else Stance.MIXED,
                 strength=0.8 if self.expect_positive else 0.4,
-                supporting_quote=self.quote,
+                supporting_quote=self.mention.quote,
             )
         ]
-
-
-@cache
-def labeled_query() -> str:
-    return str(_load()["query"])
 
 
 @cache
@@ -110,15 +116,22 @@ def labeled_comments() -> tuple[LabeledComment, ...]:
             label=str(entry["label"]),
             user_id=str(entry["user_id"]),
             body=str(entry["body"]),
-            quote=entry["quote"],
-            raw_text=entry["raw_text"],
-            entity=entry["entity"],
-            entity_type=EntityType(entry["entity_type"]) if entry["entity_type"] else None,
             expect_relevant=bool(entry["expect_relevant"]),
             expect_positive=bool(entry["expect_positive"]),
-            expect_entities=tuple(entry["expect_entities"]),
+            mention=_mention(entry["mention"]),
         )
         for entry in _load()["comments"]
+    )
+
+
+def _mention(entry: dict[str, Any] | None) -> LabeledMention | None:
+    if entry is None:
+        return None
+    return LabeledMention(
+        raw_text=str(entry["raw_text"]),
+        entity=str(entry["entity"]),
+        entity_type=EntityType(entry["entity_type"]),
+        quote=str(entry["quote"]),
     )
 
 

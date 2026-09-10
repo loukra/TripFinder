@@ -31,7 +31,6 @@ from tripfinder.analysis.comment_analysis import (
     EntityMention,
 )
 from tripfinder.domain.models import (
-    Comment,
     EntityType,
     ResearchStatus,
     Stance,
@@ -41,6 +40,7 @@ from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
 
 ALL = labeled_comments()
+CLEAR = labeled("clearly_relevant")
 
 
 class RecordingLLM:
@@ -161,8 +161,9 @@ class TestSemanticMatchesSurviveWhereKeywordsWouldNot:
 
         await CommentAnalysisStep().run(context)
 
+        assert entry.mention is not None
         (analysis,) = context.data["counted_analyses"]
-        assert [mention.normalized_guess for mention in analysis.mentions] == [entry.entity]
+        assert [mention.normalized_guess for mention in analysis.mentions] == [entry.mention.entity]
         assert analysis.mentions[0].stance is Stance.POSITIVE
 
     async def test_the_state_it_recommends_is_never_named_in_its_body(self) -> None:
@@ -291,7 +292,7 @@ class TestTheCountedAndEvidenceCorporaStaySeparate:
     """Plan §4.5: a topical thread's users may not reach the respondent pool."""
 
     async def test_analyses_keep_the_corpus_they_came_from(self) -> None:
-        counted = labeled("clearly_relevant")
+        counted = CLEAR
         evidence = labeled("ambiguous")
         context = _context(
             counted=counted,
@@ -310,7 +311,7 @@ class TestTheCountedAndEvidenceCorporaStaySeparate:
 
     async def test_the_counted_corpus_is_analysed_first(self) -> None:
         """Budget priority (plan §4.5): evidence spends only what is left."""
-        counted = labeled("clearly_relevant")
+        counted = CLEAR
         evidence = labeled("ambiguous")
         context = _context(
             counted=counted,
@@ -383,10 +384,8 @@ class TestASuppressedRunIsDistinguishableFromAThinOne:
     @staticmethod
     async def _thin_run() -> PipelineContext:
         """The model read every comment and found nothing recommended."""
-        empty = CommentAnalysisBatch(
-            items=[_analysis(entry.id) for entry in labeled("clearly_relevant")]
-        )
-        context = _context(counted=labeled("clearly_relevant"), responses=[empty])
+        empty = CommentAnalysisBatch(items=[_analysis(entry.id) for entry in CLEAR])
+        context = _context(counted=CLEAR, responses=[empty])
         await CommentAnalysisStep().run(context)
         return context
 
@@ -396,10 +395,10 @@ class TestASuppressedRunIsDistinguishableFromAThinOne:
         fabricated = CommentAnalysisBatch(
             items=[
                 _analysis(entry.id, _mention(supporting_quote="never written by anyone"))
-                for entry in labeled("clearly_relevant")
+                for entry in CLEAR
             ]
         )
-        context = _context(counted=labeled("clearly_relevant"), responses=[fabricated])
+        context = _context(counted=CLEAR, responses=[fabricated])
         await CommentAnalysisStep().run(context)
         return context
 
@@ -415,7 +414,9 @@ class TestASuppressedRunIsDistinguishableFromAThinOne:
         suppressed = await self._suppressed_run()
 
         assert thin.research.diagnostics.suppressions == []
-        assert _suppressions(suppressed, SuppressionReason.ANALYSIS_FABRICATED_QUOTE) == [2]
+        assert _suppressions(suppressed, SuppressionReason.ANALYSIS_FABRICATED_QUOTE) == [
+            len(CLEAR)
+        ]
 
     async def test_the_suppression_names_what_it_dropped_and_why(self) -> None:
         suppressed = await self._suppressed_run()
@@ -430,7 +431,7 @@ class TestASuppressedRunIsDistinguishableFromAThinOne:
         suppressed = await self._suppressed_run()
 
         assert thin.research.statistics["analysis_mentions_fabricated_quote"] == 0
-        assert suppressed.research.statistics["analysis_mentions_fabricated_quote"] == 2
+        assert suppressed.research.statistics["analysis_mentions_fabricated_quote"] == len(CLEAR)
 
 
 class TestTheStepReadsWhatPreFilterWrote:
@@ -451,7 +452,3 @@ class TestTheStepReadsWhatPreFilterWrote:
         await CommentAnalysisStep().run(context)
 
         assert context.research.status is ResearchStatus.ANALYZING
-
-
-def test_the_fixture_comments_are_real_domain_comments() -> None:
-    assert all(isinstance(entry.as_comment(), Comment) for entry in ALL)

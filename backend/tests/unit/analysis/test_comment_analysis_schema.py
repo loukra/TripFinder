@@ -138,8 +138,10 @@ class TestTheLabeledFixtureSet:
 
     def test_every_quote_and_surface_form_is_verbatim(self) -> None:
         for entry in labeled_comments():
-            assert entry.quote is None or entry.quote in entry.body, entry.id
-            assert entry.raw_text is None or entry.raw_text in entry.body, entry.id
+            if entry.mention is None:
+                continue
+            assert entry.mention.quote in entry.body, entry.id
+            assert entry.mention.raw_text in entry.body, entry.id
 
     def test_the_equivalent_wording_comments_share_no_keyword_with_the_query(self) -> None:
         """Keyword matching cannot rescue these — only meaning can."""
@@ -149,8 +151,14 @@ class TestTheLabeledFixtureSet:
             body = entry.body.lower()
             assert "underrated" not in body
             assert "nature" not in body
-            assert entry.entity is not None
-            assert entry.entity.lower() not in body
+            assert entry.mention is not None
+            assert entry.mention.entity.lower() not in body
+
+    def test_every_fixture_is_a_valid_domain_comment(self) -> None:
+        """Construction is the assertion — an empty id or body would not validate."""
+        corpus = labeled_comments()
+
+        assert [entry.as_comment().id for entry in corpus] == [entry.id for entry in corpus]
 
     def test_a_missing_fixture_raises(self) -> None:
         with pytest.raises(LookupError):

@@ -24,6 +24,7 @@ from builders.phase7 import make_context
 from tripfinder.ai.factory import LLMProviderName, build_llm_provider
 from tripfinder.analysis.comment_analysis import CommentAnalysis
 from tripfinder.domain.models import ResearchStatus, Stance
+from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
 from tripfinder.settings import Settings
 
@@ -31,14 +32,14 @@ pytestmark = pytest.mark.evaluation
 
 ALL = labeled_comments()
 
-_ANALYSED: dict[str, CommentAnalysis] = {}
-_FABRICATED: list[int] = []
+_RUN: PipelineContext | None = None
 
 
-async def _analysed() -> dict[str, CommentAnalysis]:
-    """The real model's reading of the whole corpus, fetched once per session."""
-    if _ANALYSED:
-        return _ANALYSED
+async def _run() -> PipelineContext:
+    """The real model's reading of the whole corpus — one call per session."""
+    global _RUN
+    if _RUN is not None:
+        return _RUN
 
     settings = Settings.from_env()
     if settings.openai_api_key is None:
@@ -53,11 +54,13 @@ async def _analysed() -> dict[str, CommentAnalysis]:
 
     await CommentAnalysisStep(batch_size=len(ALL)).run(context)
 
-    _ANALYSED.update(
-        {analysis.comment_id: analysis for analysis in context.data["comment_analyses"]}
-    )
-    _FABRICATED.append(context.research.statistics["analysis_mentions_fabricated_quote"])
-    return _ANALYSED
+    _RUN = context
+    return context
+
+
+async def _analysed() -> dict[str, CommentAnalysis]:
+    context = await _run()
+    return {analysis.comment_id: analysis for analysis in context.data["comment_analyses"]}
 
 
 def _positive(analysis: CommentAnalysis) -> bool:
@@ -82,14 +85,17 @@ async def test_relevance_matches_the_label(entry: LabeledComment) -> None:
     assert (analysis.topic_relevance >= 0.5) is entry.expect_relevant, analysis.reasoning
 
 
-@pytest.mark.parametrize("entry", ALL, ids=lambda entry: str(entry.id))
+RECOMMENDING = [entry for entry in ALL if entry.mention is not None]
+
+
+@pytest.mark.parametrize("entry", RECOMMENDING, ids=lambda entry: str(entry.id))
 async def test_the_expected_places_are_recognised(entry: LabeledComment) -> None:
     """Including the ones named only by nickname — the acceptance criterion."""
+    assert entry.mention is not None
     analysis = (await _analysed())[entry.id]
     guesses = " ".join(mention.normalized_guess.lower() for mention in analysis.mentions)
 
-    for expected in entry.expect_entities:
-        assert expected.lower() in guesses, _names(analysis)
+    assert entry.mention.entity.lower() in guesses, _names(analysis)
 
 
 @pytest.mark.parametrize("entry", ALL, ids=lambda entry: str(entry.id))
@@ -102,9 +108,9 @@ async def test_stance_matches_the_label(entry: LabeledComment) -> None:
 
 async def test_the_model_quotes_verbatim() -> None:
     """Every mention it made survived verification — nothing had to be discarded."""
-    await _analysed()
+    context = await _run()
 
-    assert _FABRICATED == [0]
+    assert context.research.statistics["analysis_mentions_fabricated_quote"] == 0
 
 
 async def test_every_relevant_comment_yields_at_least_one_mention() -> None:

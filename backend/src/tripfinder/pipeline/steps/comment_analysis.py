@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Sequence
+from typing import NamedTuple
 
 from tripfinder.analysis.comment_analysis import (
     CommentAnalysis,
@@ -51,9 +52,27 @@ DEFAULT_ANALYSIS_BATCH_SIZE = 20
 """Comments per structured call (plan §5)."""
 
 
+class _BatchResult(NamedTuple):
+    """What one structured call produced, and what it cost in dropped evidence."""
+
+    analyses: dict[str, CommentAnalysis]
+    discarded: int
+    """Items that named no comment in the batch, or named one twice."""
+
+    fabricated: int
+    """Mentions whose supporting quote was not in the comment."""
+
+
 def _batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
     for start in range(0, len(comments), size):
         yield comments[start : start + size]
+
+
+def _in_order(
+    comments: Sequence[Comment], analyses: dict[str, CommentAnalysis]
+) -> list[CommentAnalysis]:
+    """The analyses for ``comments``, in their order, skipping any that are missing."""
+    return [analyses[comment.id] for comment in comments if comment.id in analyses]
 
 
 class CommentAnalysisStep:
@@ -77,15 +96,13 @@ class CommentAnalysisStep:
         # them in: the corpus that decides the ranking is analysed before the
         # corpus that only illustrates it.
         for batch in _batched(counted + evidence, self._batch_size):
-            batch_analyses, batch_discarded, batch_fabricated = await self._analyse(
-                context, plan, batch
-            )
-            analyses.update(batch_analyses)
-            discarded += batch_discarded
-            fabricated += batch_fabricated
+            result = await self._analyse(context, plan, batch)
+            analyses.update(result.analyses)
+            discarded += result.discarded
+            fabricated += result.fabricated
 
-        counted_analyses = [analyses[comment.id] for comment in counted if comment.id in analyses]
-        evidence_analyses = [analyses[comment.id] for comment in evidence if comment.id in analyses]
+        counted_analyses = _in_order(counted, analyses)
+        evidence_analyses = _in_order(evidence, analyses)
         context.data["counted_analyses"] = counted_analyses
         context.data["evidence_analyses"] = evidence_analyses
         context.data["comment_analyses"] = counted_analyses + evidence_analyses
@@ -102,8 +119,8 @@ class CommentAnalysisStep:
 
     async def _analyse(
         self, context: PipelineContext, plan: ResearchPlan, batch: Sequence[Comment]
-    ) -> tuple[dict[str, CommentAnalysis], int, int]:
-        """One structured call. Returns its analyses, items dropped, quotes rejected."""
+    ) -> _BatchResult:
+        """One structured call, matched back to the comments it was asked about."""
         response = await context.llm.complete_structured(
             prompt=build_comment_analysis_prompt(plan, batch),
             response_model=CommentAnalysisBatch,
@@ -135,7 +152,7 @@ class CommentAnalysisStep:
             fabricated += rejected
 
         self._record_suppressions(context, requested, analyses, fabricated)
-        return analyses, discarded, fabricated
+        return _BatchResult(analyses, discarded, fabricated)
 
     def _verify_quotes(
         self, item: CommentAnalysis, comment: Comment
