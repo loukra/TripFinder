@@ -11,6 +11,7 @@ run that found little — closes the file.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 
 import pytest
@@ -38,7 +39,10 @@ from tripfinder.domain.models import (
     SuppressionReason,
 )
 from tripfinder.pipeline.base import PipelineContext
-from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
+from tripfinder.pipeline.steps.comment_analysis import (
+    DEFAULT_MAX_CONCURRENT_BATCHES,
+    CommentAnalysisStep,
+)
 
 ALL = labeled_comments()
 CLEAR = labeled("clearly_relevant")
@@ -56,6 +60,33 @@ class RecordingLLM:
     ) -> T:
         self.prompts.append(prompt)
         return await self._inner.complete_structured(prompt=prompt, response_model=response_model)
+
+
+class ConcurrencyWatchingLLM:
+    """Answers like the fake, and records how many calls overlapped.
+
+    Every call yields control at least once before answering, so a step that
+    dispatches sequentially cannot accidentally look concurrent: with an
+    ``await`` in the middle, overlap is observable exactly when it is real.
+    """
+
+    def __init__(self, responses: Sequence[CommentAnalysisBatch]) -> None:
+        self._inner = FakeLLMProvider({CommentAnalysisBatch: list(responses)})
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def complete_structured[T: BaseModel](
+        self, *, prompt: str, response_model: type[T]
+    ) -> T:
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0)
+            return await self._inner.complete_structured(
+                prompt=prompt, response_model=response_model
+            )
+        finally:
+            self.in_flight -= 1
 
 
 def _context(
@@ -289,6 +320,78 @@ class TestTheReasonCodeBreakdown:
         assert off_topic.research.statistics["analysis_reason_recommends"] == 0
         assert recommending.research.statistics["analysis_reason_recommends"] == len(CLEAR)
         assert recommending.research.statistics["analysis_reason_off_topic"] == 0
+
+
+class TestBatchesRunConcurrently:
+    """Plan §2.12/14.6b: 50 round trips in series were 93 % of a 2408 s run."""
+
+    def _watching(self, entries: Sequence[LabeledComment], *, batch_size: int) -> PipelineContext:
+        batches = [
+            tuple(entries[start : start + batch_size])
+            for start in range(0, len(entries), batch_size)
+        ]
+        context = make_context(
+            llm=ConcurrencyWatchingLLM([expected_batch(batch) for batch in batches]),
+            status=ResearchStatus.ANALYZING,
+        )
+        context.data["counted_comments"] = [entry.as_comment() for entry in entries]
+        context.data["evidence_comments"] = []
+        return context
+
+    async def test_more_than_one_batch_is_in_flight_at_a_time(self) -> None:
+        context = self._watching(ALL, batch_size=2)
+
+        await CommentAnalysisStep(batch_size=2, max_concurrent_batches=5).run(context)
+
+        llm = context.llm
+        assert isinstance(llm, ConcurrencyWatchingLLM)
+        assert llm.peak_in_flight > 1
+
+    async def test_the_ceiling_is_never_exceeded(self) -> None:
+        """Unbounded fan-out buys 429s, which §8.1 has to report as lost evidence."""
+        context = self._watching(ALL, batch_size=1)
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=3).run(context)
+
+        llm = context.llm
+        assert isinstance(llm, ConcurrencyWatchingLLM)
+        assert llm.peak_in_flight == 3
+        assert len(context.data["comment_analyses"]) == len(ALL)
+
+    async def test_a_ceiling_of_one_is_still_sequential(self) -> None:
+        context = self._watching(ALL, batch_size=1)
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=1).run(context)
+
+        llm = context.llm
+        assert isinstance(llm, ConcurrencyWatchingLLM)
+        assert llm.peak_in_flight == 1
+
+    async def test_the_default_ceiling_is_documented_and_above_one(self) -> None:
+        assert DEFAULT_MAX_CONCURRENT_BATCHES > 1
+
+    async def test_results_keep_corpus_order_not_completion_order(self) -> None:
+        """§4.5's split and §4.1's ordering must not depend on which call won."""
+        context = self._watching(ALL, batch_size=1)
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=4).run(context)
+
+        analysed = [analysis.comment_id for analysis in context.data["comment_analyses"]]
+        assert analysed == [entry.id for entry in ALL]
+
+    async def test_two_concurrent_runs_over_one_corpus_agree(self) -> None:
+        """Determinism is the acceptance criterion concurrency most threatens."""
+        first = self._watching(ALL, batch_size=2)
+        second = self._watching(ALL, batch_size=2)
+
+        await CommentAnalysisStep(batch_size=2, max_concurrent_batches=4).run(first)
+        await CommentAnalysisStep(batch_size=2, max_concurrent_batches=4).run(second)
+
+        assert first.research.statistics == second.research.statistics
+        assert first.research.diagnostics.suppressions == second.research.diagnostics.suppressions
+        assert [a.comment_id for a in first.data["comment_analyses"]] == [
+            a.comment_id for a in second.data["comment_analyses"]
+        ]
 
 
 class TestBatching:

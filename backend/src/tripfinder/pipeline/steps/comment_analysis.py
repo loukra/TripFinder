@@ -33,6 +33,7 @@ thread's users still cannot reach the respondent pool.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
@@ -52,6 +53,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_ANALYSIS_BATCH_SIZE = 20
 """Comments per structured call (plan §5)."""
 
+DEFAULT_MAX_CONCURRENT_BATCHES = 8
+"""Batches in flight at once (plan §2.12, 14.6b).
+
+Derived, not guessed. A 20-comment batch measured 23.2 s at
+``reasoning.effort=low``, and ``maxAIAnalysisItems`` of 1000 is 50 batches:
+sequentially 1160 s, against an admission window of 240 s once §2.12.2's
+tail reserve comes off the 300 s budget. Fitting 50 batches into that window
+needs about five in flight; eight leaves headroom for batches slower than
+the measured one without pushing hard into provider rate limits, which
+answer with 429s that §8.1 has to account for as lost evidence.
+
+Phase 15 tunes this against real runs. It is the kind of number that should
+move once there is more than one measurement behind it.
+"""
+
 
 class _BatchResult(NamedTuple):
     """What one structured call produced, and what it cost in dropped evidence."""
@@ -62,6 +78,9 @@ class _BatchResult(NamedTuple):
 
     fabricated: int
     """Mentions whose supporting quote was not in the comment."""
+
+    unanswered: tuple[str, ...]
+    """Comments this batch asked about and got no verdict for."""
 
 
 def _batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
@@ -98,26 +117,39 @@ class CommentAnalysisStep:
 
     name = "comment_analysis"
 
-    def __init__(self, *, batch_size: int = DEFAULT_ANALYSIS_BATCH_SIZE) -> None:
+    def __init__(
+        self,
+        *,
+        batch_size: int = DEFAULT_ANALYSIS_BATCH_SIZE,
+        max_concurrent_batches: int = DEFAULT_MAX_CONCURRENT_BATCHES,
+    ) -> None:
         self._batch_size = batch_size
+        self._max_concurrent_batches = max_concurrent_batches
 
     async def run(self, context: PipelineContext) -> PipelineContext:
         plan: ResearchPlan = context.data["plan"]
         counted: list[Comment] = list(context.data.get("counted_comments", []))
         evidence: list[Comment] = list(context.data.get("evidence_comments", []))
 
+        # Counted comments first, in the §4.5 budget order pre-filter left
+        # them in: the corpus that decides the ranking is dispatched before
+        # the corpus that only illustrates it.
+        batches = list(_batched(counted + evidence, self._batch_size))
+        results = await self._analyse_all(context, plan, batches)
+
+        # Merged in batch order, never in completion order. Concurrency is
+        # about when a call is *made*; two runs over the same corpus still
+        # have to produce the same statistics and the same suppressions.
         analyses: dict[str, CommentAnalysis] = {}
         discarded = 0
         fabricated = 0
-
-        # Counted comments first, in the §4.5 budget order pre-filter left
-        # them in: the corpus that decides the ranking is analysed before the
-        # corpus that only illustrates it.
-        for batch in _batched(counted + evidence, self._batch_size):
-            result = await self._analyse(context, plan, batch)
+        unanswered: list[str] = []
+        for result in results:
             analyses.update(result.analyses)
             discarded += result.discarded
             fabricated += result.fabricated
+            unanswered.extend(result.unanswered)
+        self._record_suppressions(context, fabricated, unanswered)
 
         counted_analyses = _in_order(counted, analyses)
         evidence_analyses = _in_order(evidence, analyses)
@@ -135,6 +167,35 @@ class CommentAnalysisStep:
         statistics["analysis_items_discarded"] = discarded
         statistics.update(_reason_code_counts(analyses.values()))
         return context
+
+    async def _analyse_all(
+        self,
+        context: PipelineContext,
+        plan: ResearchPlan,
+        batches: Sequence[Sequence[Comment]],
+    ) -> list[_BatchResult]:
+        """Every batch, at most ``max_concurrent_batches`` of them in flight.
+
+        The measured run spent 2245.9 s of its 2408 s here, in 50 round trips
+        taken strictly one after another (plan §2.12). Nothing about the work
+        required that: each batch is an independent question about a disjoint
+        set of comments, so the only thing serialising them bought was
+        latency.
+
+        The ceiling is not a formality. Unbounded fan-out would put 50 calls
+        at the provider at once, and the answer to that is 429s — evidence
+        lost to a self-inflicted rate limit, which §8.1 would then have to
+        report as a degraded run.
+
+        Results come back in batch order, not completion order (see ``run``).
+        """
+        limit = asyncio.Semaphore(self._max_concurrent_batches)
+
+        async def analyse_one(batch: Sequence[Comment]) -> _BatchResult:
+            async with limit:
+                return await self._analyse(context, plan, batch)
+
+        return list(await asyncio.gather(*(analyse_one(batch) for batch in batches)))
 
     async def _analyse(
         self, context: PipelineContext, plan: ResearchPlan, batch: Sequence[Comment]
@@ -170,8 +231,10 @@ class CommentAnalysisStep:
             analyses[item.comment_id] = analysis
             fabricated += rejected
 
-        self._record_suppressions(context, requested, analyses, fabricated)
-        return _BatchResult(analyses, discarded, fabricated)
+        unanswered = tuple(
+            comment_id for comment_id in requested if comment_id not in analyses
+        )
+        return _BatchResult(analyses, discarded, fabricated, unanswered)
 
     def _verify_quotes(
         self, item: CommentAnalysis, comment: Comment
@@ -194,12 +257,9 @@ class CommentAnalysisStep:
         return item.model_copy(update={"mentions": verified}), rejected
 
     def _record_suppressions(
-        self,
-        context: PipelineContext,
-        requested: dict[str, Comment],
-        analyses: dict[str, CommentAnalysis],
-        fabricated: int,
+        self, context: PipelineContext, fabricated: int, unanswered: Sequence[str]
     ) -> None:
+        """Once, after every batch is in — so the record does not depend on timing."""
         diagnostics = context.research.diagnostics
         diagnostics.record_suppression(
             step=self.name,
@@ -207,12 +267,11 @@ class CommentAnalysisStep:
             count=fabricated,
             detail="mentions discarded — the supporting quote was not in the comment",
         )
-        missing = [comment_id for comment_id in requested if comment_id not in analyses]
         diagnostics.record_suppression(
             step=self.name,
             reason=SuppressionReason.ANALYSIS_NO_RESULT,
-            count=len(missing),
+            count=len(unanswered),
             detail="comments the analysis call returned no verdict for",
         )
-        if missing:
-            logger.warning("analysis: no verdict returned for %d comment(s)", len(missing))
+        if unanswered:
+            logger.warning("analysis: no verdict returned for %d comment(s)", len(unanswered))
