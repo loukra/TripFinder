@@ -249,7 +249,10 @@ describe("ResultsView, while a run is still counting", () => {
     expect(screen.getByText(/nothing counted yet/i)).toBeInTheDocument();
   });
 
-  it("holds a reorder while a row is being read, and applies it afterwards", async () => {
+  it("keeps updating while the pointer rests on the list", async () => {
+    // The first version of the hold froze on hover, so a pointer left
+    // anywhere on the list stopped the page — under a banner still
+    // promising the numbers were growing.
     const user = userEvent.setup();
     const vermont = makeResult({ supporter_count: 2 });
     const maine = makeResult({
@@ -262,19 +265,57 @@ describe("ResultsView, while a run is still counting", () => {
     );
 
     await user.hover(screen.getByText("Vermont").closest("li")!);
-    // A new snapshot arrives with Maine ahead — the reader is mid-row, so the
-    // list must not move under them yet.
-    const reordered = makeProvisional({
-      weak_results: [{ ...maine, supporter_count: 9 }, vermont],
-    });
-    rerender(<ResultsView researchId="r1" data={reordered} />);
-
-    expect(namesInOrder()).toEqual(["Vermont", "Maine"]);
-
-    await user.unhover(screen.getByText("Vermont").closest("li")!);
-    rerender(<ResultsView researchId="r1" data={reordered} />);
+    rerender(
+      <ResultsView
+        researchId="r1"
+        data={makeProvisional({ weak_results: [{ ...maine, supporter_count: 9 }, vermont] })}
+      />
+    );
 
     expect(namesInOrder()).toEqual(["Maine", "Vermont"]);
+  });
+
+  it("shows the finished answer even while evidence is open", async () => {
+    // The defect this exists to prevent: a run finished at 66 supporters
+    // while the page went on showing a provisional 32 and "still counting",
+    // because an open panel held the view past the end of the run. A view
+    // that withholds the finished result is worse than one that reorders.
+    const user = userEvent.setup();
+    vi.mocked(api.getEvidence).mockResolvedValue({
+      entity_id: "state:vermont",
+      entity_name: "Vermont",
+      total: 0,
+      limit: 10,
+      offset: 0,
+      permalinks: [],
+    });
+    const { rerender } = render(
+      <ResultsView
+        researchId="r1"
+        data={makeProvisional({ weak_results: [makeResult({ supporter_count: 32 })] })}
+      />
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "View evidence" })[0]);
+    expect(screen.getByText(/still counting/i)).toBeInTheDocument();
+
+    rerender(
+      <ResultsView
+        researchId="r1"
+        data={{
+          ...makeProvisional(),
+          status: "completed_partial",
+          provisional: false,
+          percentages_suppressed: false,
+          results: [makeResult({ supporter_count: 66, share: 0.103 })],
+          weak_results: [],
+        }}
+      />
+    );
+
+    expect(screen.getByText("66")).toBeInTheDocument();
+    expect(screen.queryByText("32")).not.toBeInTheDocument();
+    expect(screen.queryByText(/still counting/i)).not.toBeInTheDocument();
   });
 
   it("holds a reorder while an evidence panel is open, even after the mouse leaves", async () => {

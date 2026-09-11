@@ -8,6 +8,7 @@ from builders.phase7 import RecordingSourceAdapter, make_comment, make_context, 
 from tripfinder.analysis.aliases import StaticAliasTable
 from tripfinder.domain.config import ResearchBudget, ResearchConfig
 from tripfinder.domain.models import (
+    Comment,
     EntityType,
     ResearchFlag,
     ResearchStatus,
@@ -236,7 +237,7 @@ async def test_the_step_advances_the_research_to_analyzing() -> None:
 # largely the same people again.
 
 
-def _fat(document_id: str, count: int) -> list:
+def _fat(document_id: str, count: int) -> list[Comment]:
     return [
         make_comment(
             f"{document_id}-c{index}",

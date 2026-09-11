@@ -25,12 +25,21 @@ function confidenceBand(confidence: number): { label: string; tagClass: string }
 }
 
 export function ResultsView({ researchId, data }: ResultsViewProps) {
-  // What the reader is currently busy with: a row hovered or focused, or an
-  // evidence panel open. A provisional list reorders as counts grow (plan
-  // §2.13.1), which is honest — except at the moment it moves a row out from
-  // under someone reading it. So while anything is held the view keeps
-  // showing what was on screen when the hold began, and takes the newest
-  // data the moment the hold ends.
+  // A provisional list reorders as counts grow (plan §2.13.1), which is
+  // honest — except at the moment it moves a row out from under someone who
+  // has opened its evidence. So an open evidence panel holds the view where
+  // it was, and it takes the newest data the moment the panel closes.
+  //
+  // **Two bounds, both of them learned the hard way.** The first version
+  // also held on hover and on focus, and held the *data* rather than the
+  // provisional data — so a pointer resting anywhere on the list froze the
+  // page, and the freeze outlived the run: the final answer arrived and was
+  // never shown, under a banner still promising that the numbers were
+  // growing. A view that withholds the finished result is worse than one
+  // that reorders under a cursor, and a banner that describes a state the
+  // page is no longer in is exactly the §0.1 failure in miniature. So:
+  // nothing holds a finished run, and only a deliberate act — opening
+  // evidence — holds an unfinished one.
   const [hold, setHold] = useState<Hold>(() => ({ keys: new Set(), frozen: null }));
 
   const setRowHeld = useCallback(
@@ -48,7 +57,8 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
     [data]
   );
 
-  const shown = hold.frozen ?? data;
+  // A finished run is the answer. It always lands, whatever is being read.
+  const shown = data.provisional ? (hold.frozen ?? data) : data;
   const { results, weak_results: weakResults, message, provisional } = shown;
   const percentagesSuppressed = shown.percentages_suppressed;
   const threshold = shown.minimum_independent_users;
@@ -213,9 +223,6 @@ function ResultRow({
   onHoldChange,
 }: ResultRowProps) {
   const [showEvidence, setShowEvidence] = useState(false);
-  // Two reasons a row can be held, tracked separately: the mouse can leave a
-  // row whose evidence panel is still open, and that row is still being read.
-  const pointerKey = `${result.entity_id}:pointer`;
   const evidenceKey = `${result.entity_id}:evidence`;
 
   function toggleEvidence() {
@@ -232,13 +239,7 @@ function ResultRow({
   const confidence = confidenceBand(result.confidence);
 
   return (
-    <li
-      className="result-row"
-      onMouseEnter={() => onHoldChange(pointerKey, true)}
-      onMouseLeave={() => onHoldChange(pointerKey, false)}
-      onFocus={() => onHoldChange(pointerKey, true)}
-      onBlur={() => onHoldChange(pointerKey, false)}
-    >
+    <li className="result-row">
       <div className="result-main">
         <div className="result-figure">
           <div className="result-count">{result.supporter_count}</div>
