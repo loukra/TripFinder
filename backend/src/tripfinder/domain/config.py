@@ -18,7 +18,14 @@ class ResearchBudget(BaseModel):
     max_posts_per_query: int = Field(default=25, gt=0)
     max_total_posts: int = Field(default=120, gt=0)
     max_comments: int = Field(default=4000, gt=0)
-    max_ai_analysis_items: int = Field(default=1000, gt=0)
+    max_ai_analysis_items: int = Field(default=1500, gt=0)
+    """The analysis corpus cap (plan §2.14.1).
+
+    1500, not 1000, because the target is arithmetic rather than taste: the
+    measured run turned 840 analysed comments into a respondent pool of 417
+    holding 56 at the top, so a top result of 100 needs a pool near 745 and
+    about 1500 comments to produce it.
+    """
     max_research_duration_seconds: int = Field(default=300, gt=0)
     tail_reserve_seconds: int = Field(default=60, ge=0)
     """Subtracted from the duration budget to derive the dispatch deadline (plan §2.12.2).

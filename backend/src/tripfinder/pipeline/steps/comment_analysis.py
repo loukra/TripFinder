@@ -88,7 +88,7 @@ another adapter in the same recorder, rather than a parallel accounting
 scheme with its own rules to keep in step.
 """
 
-DEFAULT_MAX_CONCURRENT_BATCHES = 8
+DEFAULT_MAX_CONCURRENT_BATCHES = 16
 """Batches in flight at once (plan §2.12, 14.6b).
 
 Derived, not guessed. A 20-comment batch measured 23.2 s at
@@ -98,6 +98,13 @@ tail reserve comes off the 300 s budget. Fitting 50 batches into that window
 needs about five in flight; eight leaves headroom for batches slower than
 the measured one without pushing hard into provider rate limits, which
 answer with 429s that §8.1 has to account for as lost evidence.
+
+Raised to 16 for 14.8 (plan §2.14.1). The arithmetic that sets it changed:
+a top result of 100 supporters needs ~1500 analysed comments, which is 75
+calls, and per-call latency does not shrink when the payload does (§2.12.3).
+Waves are therefore the only variable left. 16 is a deliberate half-step —
+§2.14.1's arithmetic asks for ~80, and this is the value being tried first
+against a real account's rate limit before going wider.
 
 Phase 15 tunes this against real runs. It is the kind of number that should
 move once there is more than one measurement behind it.

@@ -29,6 +29,13 @@ class ReasoningEffort(StrEnum):
     against a question it never saw (plan §5), and buying 2.5 s per batch by
     taking away the thinking is the kind of trade Phase 15 should make on
     evidence, not one to assume up front.
+
+    ``MINIMAL`` is the default from 14.8, for the 60-second target (§2.14.1)
+    — one step down from ``LOW`` rather than the whole way to ``NONE``, so
+    the judgement above keeps some thinking behind it. The measurements
+    above say what this is worth: roughly 2 s per call, not a halving. It is
+    a small lever pulled because the target needs every one of them, and
+    Phase 15 owns whether the analysis quality paid for it.
     """
 
     NONE = "none"
@@ -42,7 +49,7 @@ class OpenAIConfig(BaseModel):
     """Model, timeout, retry and token settings for :class:`OpenAIProvider`."""
 
     model: str = "gpt-5.6-luna"
-    reasoning_effort: ReasoningEffort | None = ReasoningEffort.LOW
+    reasoning_effort: ReasoningEffort | None = ReasoningEffort.MINIMAL
     """``None`` sends no reasoning parameter at all — the model's own default."""
 
     timeout_seconds: float = Field(default=60.0, gt=0.0)
