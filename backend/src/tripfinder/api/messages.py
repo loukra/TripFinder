@@ -17,6 +17,8 @@ it found?* — and every entry answers it differently:
 
 from __future__ import annotations
 
+import random
+
 from tripfinder.domain.models import FailureKind, ResearchFailure, ResearchStatus
 
 STATUS_MESSAGES: dict[ResearchStatus, str] = {
@@ -49,6 +51,48 @@ STATUS_MESSAGES: dict[ResearchStatus, str] = {
     ResearchStatus.FAILED: "Something went wrong inside this research. Nothing was produced.",
     ResearchStatus.CANCELLED: "You cancelled this research before it finished.",
 }
+
+
+PROGRESS_FLAVOR: dict[ResearchStatus, list[str]] = {
+    ResearchStatus.PENDING: [
+        "Queued. This research has not started yet.",
+        "In line. A worker will pick this up any second now.",
+        "Waiting for a free worker — shouldn't be long.",
+    ],
+    ResearchStatus.UNDERSTANDING: [
+        "Working out what you are asking for.",
+        "Reading your question carefully before doing anything else.",
+        "Making sense of your question.",
+    ],
+    ResearchStatus.DISCOVERING: [
+        "Searching for discussions that answer your question.",
+        "Digging through Reddit threads for opinions worth counting.",
+        "Casting a wide net across the relevant subreddits.",
+        "Hunting down every thread that might have an answer.",
+    ],
+    ResearchStatus.RETRIEVING: [
+        "Reading the discussions we found.",
+        "Pulling up every comment thread worth a closer look.",
+        "Opening each thread and scrolling all the way down.",
+    ],
+    ResearchStatus.ANALYZING: [
+        "Working out what each comment recommends.",
+        "Reading between the lines, one comment at a time.",
+        "Figuring out who's recommending what, and how strongly.",
+    ],
+    ResearchStatus.AGGREGATING: [
+        "Counting who recommended what.",
+        "Tallying the votes.",
+        "Adding it all up.",
+    ],
+}
+"""A playful variant per in-progress stage, picked at random on each request.
+
+Deliberately does not cover the ``§7.1`` terminal outcomes, ``rejected``,
+``needs_clarification`` or ``cancelled`` — plan §0.1 rule 4 requires those to
+be exact and stable, never one of several interchangeable phrasings. This is
+copy for "what is happening right now" only, where no promise is being made
+about what the run will find."""
 
 
 FAILURE_MESSAGES: dict[FailureKind, str] = {
@@ -99,7 +143,12 @@ def percentages_suppressed(status: ResearchStatus) -> bool:
 
 
 def research_message(status: ResearchStatus, failure: ResearchFailure | None = None) -> str:
-    """The wording for one run: its named cause when it failed, its status otherwise."""
+    """The wording for one run: its named cause when it failed, a randomly
+    picked variant while it is still in progress, or its plain status
+    wording otherwise."""
     if status is ResearchStatus.FAILED and failure is not None:
         return FAILURE_MESSAGES[failure.kind]
+    variants = PROGRESS_FLAVOR.get(status)
+    if variants:
+        return random.choice(variants)
     return status_message(status)
