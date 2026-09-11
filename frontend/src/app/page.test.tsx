@@ -226,6 +226,56 @@ describe("Home page, while a run is still counting", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
+  // What the layout promises: the ranking is in the same column, with the
+  // same furniture around it, before and after the run finishes — so the top
+  // five does not move on the page at the moment it becomes final.
+  it("keeps the ranking in the same column when the run finishes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    let current = statusResponse({
+      status: "analyzing",
+      message: "Analysing.",
+      statistics: { comments_analyzed: 1500 },
+    });
+    let currentResults: ResearchResultsResponse = {
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Still reading.",
+      percentages_suppressed: true,
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], share: null, supporter_count: 6 }],
+    };
+    vi.mocked(api.getResearch).mockImplementation(async () => current);
+    vi.mocked(api.getResults).mockImplementation(async () => currentResults);
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    const inMainColumn = (name: string) =>
+      screen.getByText(name).closest(".run-main") !== null;
+
+    expect(await screen.findByText(/provisional result/i)).toBeInTheDocument();
+    expect(inMainColumn("Alaska")).toBe(true);
+    expect(screen.getByText("Analysing opinions")).toBeInTheDocument();
+    expect(screen.getByText("1,500")).toBeInTheDocument();
+
+    current = statusResponse({
+      status: "completed",
+      message: "Finished.",
+      statistics: { comments_analyzed: 4200 },
+    });
+    currentResults = resultsResponse;
+
+    expect(await screen.findByText("47")).toBeInTheDocument();
+    expect(screen.queryByText(/provisional result/i)).not.toBeInTheDocument();
+    // Same column, and the two side columns are still there holding it in
+    // place rather than collapsing out from under it.
+    expect(inMainColumn("Alaska")).toBe(true);
+    expect(screen.getByText("Analysing opinions")).toBeInTheDocument();
+    expect(screen.getByText("4,200")).toBeInTheDocument();
+  });
+
   it("drops the provisional ranking if the run then fails", async () => {
     const user = userEvent.setup();
     vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });

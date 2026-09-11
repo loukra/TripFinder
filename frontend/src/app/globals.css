@@ -72,6 +72,7 @@
   --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
 
   --measure: 900px;
+  --measure-run: 1380px;
 }
 
 /* The design ships a `.theme-dark` class because the canvas has its own
@@ -481,6 +482,13 @@ fieldset {
   width: 100%;
 }
 
+/* A run is not prose: it needs the ranking in the middle with the stage
+   checklist and the corpus counters flanking it, which does not fit the
+   reading measure the landing page is set to. */
+.page-run {
+  max-width: var(--measure-run);
+}
+
 /* — hero / search — */
 
 .hero {
@@ -698,6 +706,61 @@ fieldset {
   flex-wrap: wrap;
 }
 
+/* — run layout —
+
+   The ranking holds the middle column for the whole run, from the first
+   provisional snapshot to the final answer, so it never jumps up the page
+   at the moment it becomes final. The side columns therefore keep their
+   width once the run ends, even when what fills them changes. */
+
+.run-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 280px) minmax(0, 1fr) minmax(0, 260px);
+  gap: 22px;
+  align-items: start;
+  margin-top: 22px;
+}
+
+.run-side {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.run-main > .section {
+  margin-top: 0;
+}
+
+.run-side-heading {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-700);
+  margin-bottom: 12px;
+}
+
+.progress-status {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Stacked, the ranking still comes first: it is what the page is for. */
+@media (max-width: 1080px) {
+  .run-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .run-side {
+    position: static;
+  }
+
+  .run-main {
+    order: -1;
+  }
+}
+
 /* — progress — */
 
 .progress-track {
@@ -724,9 +787,9 @@ fieldset {
 
 .stage-row {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
-  padding: 16px 20px;
+  padding: 12px 16px;
   border-radius: 24px;
   background: var(--color-surface);
   opacity: 0.45;
@@ -760,20 +823,19 @@ fieldset {
 
 .stage-label {
   font-family: var(--font-heading);
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .stage-state {
   margin-left: auto;
   text-align: right;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 10px;
-  margin-top: 22px;
 }
 
 .stat-card {

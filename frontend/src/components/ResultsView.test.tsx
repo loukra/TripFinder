@@ -230,15 +230,20 @@ describe("ResultsView, while a run is still counting", () => {
     expect(screen.queryByText(/Percentages are withheld for this run/)).not.toBeInTheDocument();
   });
 
-  it("shows no rank badge while the order can still change", () => {
+  // The provisional ranking is drawn as the finished one: same rows, same
+  // ranks, same position on the page, with the banner — not a different
+  // layout — carrying the claim that it is still moving (plan §2.13.1: an
+  // order that may still change is honest under an explicit label).
+  it("ranks the list as the finished view does, under a provisional label", () => {
     const data = makeProvisional({
       results: [makeResult({ entity_id: "state:alaska", entity_name: "Alaska", supporter_count: 6 })],
     });
 
     render(<ResultsView researchId="r1" data={data} />);
 
-    expect(screen.getByRole("heading", { name: /ahead so far/i })).toBeInTheDocument();
-    expect(screen.queryByText("#1")).not.toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText(/provisional result/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /ahead so far/i })).not.toBeInTheDocument();
   });
 
   it("says nothing has been counted yet when nothing has", () => {

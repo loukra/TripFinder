@@ -14,6 +14,7 @@ import { ClarificationView } from "@/components/ClarificationView";
 import { DiagnosticsSummary } from "@/components/DiagnosticsSummary";
 import { ProgressView } from "@/components/ProgressView";
 import { ResultsView } from "@/components/ResultsView";
+import { RunStats } from "@/components/RunStats";
 import { SearchForm } from "@/components/SearchForm";
 import {
   RESULTS_AVAILABLE_STATUSES,
@@ -202,6 +203,12 @@ export default function Home() {
   const showResults = run !== null && results !== null;
   const showPlainTerminalMessage = run !== null && !isRunning && !awaitingClarification && !showResults;
 
+  // The progress column stays beside the ranking after the run finishes, so
+  // that the top five does not jump up the page the moment it becomes final.
+  // A run that stopped early leaves the column empty rather than guessing how
+  // far it got.
+  const showProgress = isRunning || (run !== null && RESULTS_READY_STATUSES.has(run.status));
+
   const kicker = awaitingClarification
     ? "Before we start"
     : isRunning
@@ -219,7 +226,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="page">
+      <main className={`page${run === null ? "" : " page-run"}`}>
         {run === null ? (
           <section className="hero">
             <p className="hero-kicker">Opinion research</p>
@@ -256,33 +263,56 @@ export default function Home() {
 
             {error && <p className="error">{error}</p>}
 
-            {awaitingClarification && run.clarification && (
-              <ClarificationView
-                clarification={run.clarification}
-                onAnswer={handleClarify}
-                submitting={submitting}
-              />
-            )}
+            {/* One layout for the whole run: the ranking holds the middle
+                column from the first provisional snapshot to the final
+                answer, with where-we-are on its left and what-we-have-read
+                on its right. */}
+            <div className="run-layout">
+              <aside className="run-side">
+                {showProgress && (
+                  <ProgressView
+                    status={run.status}
+                    message={run.message}
+                    onCancel={isRunning ? handleCancel : undefined}
+                    cancelling={cancelling}
+                  />
+                )}
+              </aside>
 
-            {isRunning && (
-              <ProgressView
-                status={run.status}
-                message={run.message}
-                statistics={run.statistics}
-                onCancel={handleCancel}
-                cancelling={cancelling}
-              />
-            )}
+              <div className="run-main">
+                {awaitingClarification && run.clarification && (
+                  <ClarificationView
+                    clarification={run.clarification}
+                    onAnswer={handleClarify}
+                    submitting={submitting}
+                  />
+                )}
 
-            {showPlainTerminalMessage && (
-              <section className="terminal-state" aria-label="Research outcome">
-                <p>{run.message}</p>
-              </section>
-            )}
+                {showPlainTerminalMessage && (
+                  <section className="terminal-state" aria-label="Research outcome">
+                    <p>{run.message}</p>
+                  </section>
+                )}
 
-            {showResults && results && <ResultsView researchId={run.id} data={results} />}
+                {showResults && results && <ResultsView researchId={run.id} data={results} />}
 
-            {!isRunning && <DiagnosticsSummary diagnostics={run.diagnostics} />}
+                {isRunning && !showResults && !awaitingClarification && (
+                  <section className="section" aria-label="Results">
+                    <p className="banner banner-provisional">Provisional result — still counting.</p>
+                    <p className="text-muted empty-state">
+                      Nothing counted yet. The first comments are still being read — anything that
+                      appears here will be something somebody actually wrote.
+                    </p>
+                  </section>
+                )}
+
+                {!isRunning && <DiagnosticsSummary diagnostics={run.diagnostics} />}
+              </div>
+
+              <aside className="run-side">
+                <RunStats statistics={run.statistics} />
+              </aside>
+            </div>
           </>
         )}
       </main>

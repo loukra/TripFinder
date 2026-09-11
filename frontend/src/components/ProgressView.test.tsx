@@ -9,7 +9,6 @@ describe("ProgressView", () => {
       <ProgressView
         status="discovering"
         message="Searching for discussions that answer your question."
-        statistics={{ posts_found: 12 }}
         onCancel={vi.fn()}
         cancelling={false}
       />
@@ -17,14 +16,13 @@ describe("ProgressView", () => {
 
     expect(screen.getByText("discovering")).toBeInTheDocument();
     expect(screen.getByText(/searching for discussions/i)).toBeInTheDocument();
-    expect(screen.getByText("12")).toBeInTheDocument();
   });
 
   it("cancels on click", async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();
     render(
-      <ProgressView status="pending" message="Queued." statistics={{}} onCancel={onCancel} cancelling={false} />
+      <ProgressView status="pending" message="Queued." onCancel={onCancel} cancelling={false} />
     );
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -34,7 +32,7 @@ describe("ProgressView", () => {
 
   it("disables the cancel button while cancelling", () => {
     render(
-      <ProgressView status="pending" message="Queued." statistics={{}} onCancel={vi.fn()} cancelling={true} />
+      <ProgressView status="pending" message="Queued." onCancel={vi.fn()} cancelling={true} />
     );
 
     expect(screen.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
@@ -45,7 +43,6 @@ describe("ProgressView", () => {
       <ProgressView
         status="retrieving"
         message="Pulling comment trees."
-        statistics={{}}
         onCancel={vi.fn()}
         cancelling={false}
       />
@@ -60,11 +57,22 @@ describe("ProgressView", () => {
     expect(row("Counting independent people").getByText("Waiting")).toBeInTheDocument();
   });
 
+  // The column stays beside the ranking after the run ends so the results do
+  // not move on the page; a finished run has passed every stage, and there is
+  // nothing left to cancel.
+  it("marks every stage done for a finished run and offers no cancel", () => {
+    render(<ProgressView status="completed" message="Counted 417 people." />);
+
+    expect(screen.getAllByText("Done")).toHaveLength(5);
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
   // The checklist must never imply work that has not happened: `pending` is a
   // running status that sits before the first pipeline stage.
   it("claims no stage progress while the run is still pending", () => {
     render(
-      <ProgressView status="pending" message="Queued." statistics={{}} onCancel={vi.fn()} cancelling={false} />
+      <ProgressView status="pending" message="Queued." onCancel={vi.fn()} cancelling={false} />
     );
 
     expect(screen.getAllByText("Waiting")).toHaveLength(5);

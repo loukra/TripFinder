@@ -106,9 +106,14 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
 
   return (
     <section className="section rise" aria-label="Results">
+      {/* The provisional ranking is drawn exactly like the finished one —
+          same rows, same ranks, same place on the page — and says what it is
+          in a banner above rather than in a different layout. Plan §2.13.1
+          allows this: the order may still move, and a list under an explicit
+          provisional label is behaving as promised. */}
       {provisional && (
         <p className="banner banner-provisional">
-          Still counting — these numbers can only grow.
+          <strong>Provisional result</strong> — still counting, and these numbers can only grow.
           {pool > 0 && ` ${pool} people have given an opinion we can count so far.`}
         </p>
       )}
@@ -122,24 +127,19 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
       )}
 
       {results.length > 0 && (
-        <>
-          {provisional && (
-            <h2 className="results-group-heading">Ahead so far</h2>
-          )}
-          <ol className="result-list">
-            {results.map((result, index) => (
-              <ResultRow
-                key={result.entity_id}
-                researchId={researchId}
-                result={result}
-                rank={provisional ? null : index + 1}
-                provisional={provisional}
-                maxSupporterCount={maxSupporterCount}
-                onHoldChange={setRowHeld}
-              />
-            ))}
-          </ol>
-        </>
+        <ol className="result-list">
+          {results.map((result, index) => (
+            <ResultRow
+              key={result.entity_id}
+              researchId={researchId}
+              result={result}
+              rank={index + 1}
+              provisional={provisional}
+              maxSupporterCount={maxSupporterCount}
+              onHoldChange={setRowHeld}
+            />
+          ))}
+        </ol>
       )}
 
       {belowCap.length > 0 && (
@@ -248,8 +248,8 @@ function ResultRow({
 
         <div className="result-body">
           <div className="result-header">
-            {/* No rank number while the list is still moving: a podium
-                position is a claim the counts cannot support yet. */}
+            {/* The rank is the list's current order, provisional or not; the
+                banner above says which of the two it is. */}
             {rank !== null && <span className="text-muted result-rank">#{rank}</span>}
             <h3 className="result-name">{result.entity_name}</h3>
             <span className={`${confidence.tagClass} result-confidence`}>{confidence.label}</span>
