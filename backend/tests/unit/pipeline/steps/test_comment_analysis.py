@@ -48,6 +48,7 @@ from tripfinder.domain.models import (
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.deadline import admission_deadline, mark_started
 from tripfinder.pipeline.health import SourceAssessment, get_recorder
+from tripfinder.pipeline.steps.aggregation import AggregationStep
 from tripfinder.pipeline.steps.comment_analysis import (
     ANALYSIS_ADAPTER,
     DEFAULT_MAX_CONCURRENT_BATCHES,
@@ -746,6 +747,23 @@ class TestTheDeadlineStopsAdmissionNeverCompletion:
         assert "300s budget" in entry.detail
         assert "60s tail reserve" in entry.detail
         assert ResearchFlag.BUDGET_LIMIT_REACHED in context.research.diagnostics.flags
+
+    async def test_expiry_reaches_the_run_as_completed_partial_never_completed(self) -> None:
+        """The §10 criterion, asserted across the two steps that compose it.
+
+        Analysis raises the flag and aggregation converts it; either half
+        alone could be right while the pair is broken, and the promise made
+        to the user lives in the pair.
+        """
+        clock = Clock(START + timedelta(hours=1), per_call=timedelta(0))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=1, clock=clock.read
+        ).run(context)
+        await AggregationStep().run(context)
+
+        assert context.research.status is ResearchStatus.COMPLETED_PARTIAL
 
     async def test_a_run_inside_its_budget_dispatches_everything(self) -> None:
         clock = Clock(START, per_call=timedelta(seconds=1))
