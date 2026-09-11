@@ -77,7 +77,7 @@ def build_query_understanding_prompt(query: str) -> str:
         "and explain why.\n\n"
         "If the query names no specific place (no country, region, or other "
         "area to search within), that is not missing information — set "
-        "scope to {\"type\": \"global\", \"value\": \"Worldwide\"} rather "
+        'scope to {"type": "global", "value": "Worldwide"} rather '
         "than leaving it unset.\n\n"
         f"Query: {query!r}"
     )
