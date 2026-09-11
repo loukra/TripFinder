@@ -16,12 +16,14 @@ waiting:
   bought. §4.5 is explicit that topical material may not buy analysis
   capacity away from it, and the sequential pre-filter enforced exactly that
   by allocating counted comments their budget first;
-* **topical material draws from a reserved quota, not from what is left
-  over** (plan §4.5). Ordering polling-first cannot survive arrival-order
-  processing, and in the measured run it gave topical documents *nothing*:
-  ``topical_comments_retrieved`` was 0 because polling consumed the budget
-  first. A quota is both compatible with concurrency and closer to what
-  §4.5 asks for;
+* **topical material spends only what polling leaves** (plan §4.5). This
+  was briefly a reserved quota instead, on the reasoning that "polling
+  first" cannot survive arrival-order processing. It survives it fine as a
+  share of zero: with ``topicalQuota`` at 0 no evidence strand is started
+  at all, and a run that wants evidence material sets a share and gets
+  exactly that share. What it may not do is call a reservation
+  "leftovers" — the measured cost of that was 1800 of 4024 admitted
+  comments spent on a corpus no later step reads;
 * the dispatch deadline (§2.12.2) gates what may still be *started*, never
   what may finish.
 
@@ -50,9 +52,11 @@ class CommentClass(StrEnum):
 class RunBudget:
     """One account, shared by every strand.
 
-    ``topical_quota`` is the share of ``max_comments`` reserved for evidence
-    material. Counted comments may not draw on it, and evidence comments may
-    not draw on anything else, so neither corpus can starve the other.
+    ``topical_quota`` is the share of each budget that evidence material may
+    spend. Counted comments may not draw on it, and evidence comments may
+    not draw on anything else. At its default of zero, evidence has no
+    account at all and ``has_allowance`` says so before a strand is started,
+    which is where the saving is: an unopened document costs no fetch.
     """
 
     def __init__(
@@ -126,6 +130,17 @@ class RunBudget:
     @property
     def analysis_items_spent(self) -> int:
         return sum(self._analysis_spent.values())
+
+    def has_allowance(self, comment_class: CommentClass) -> bool:
+        """Whether this class may draw anything at all from the purse.
+
+        Asked before a strand is created rather than inside it: a strand
+        that could never admit a comment would still pay for the fetch that
+        discovers it has nothing to admit.
+        """
+        return (
+            self._allowance[comment_class] > 0 and self._analysis_allowance[comment_class] > 0
+        )
 
     def analysis_items_spent_on(self, comment_class: CommentClass) -> int:
         return self._analysis_spent[comment_class]

@@ -85,6 +85,11 @@ async def run_strands(
     polling: list[SourceDocument] = []
     topical: list[SourceDocument] = []
     triaged = 0
+    # §4.5: topical material spends what polling leaves. With no share set
+    # aside for it there is nothing to spend, so those documents are never
+    # opened — which is the point, since the fetch is the first cost and it
+    # is paid before anything can be refused.
+    opens_topical = budget.has_allowance(CommentClass.EVIDENCE)
 
     async def produce() -> None:
         """Search, and hand each turn's documents on without waiting."""
@@ -114,7 +119,10 @@ async def run_strands(
 
             for document, comment_class in (
                 *((document, CommentClass.COUNTED) for document in wave_polling),
-                *((document, CommentClass.EVIDENCE) for document in wave_topical),
+                *(
+                    (document, CommentClass.EVIDENCE)
+                    for document in (wave_topical if opens_topical else ())
+                ),
             ):
                 strands.append(
                     asyncio.create_task(
@@ -140,6 +148,20 @@ async def run_strands(
     # §8.1's floor stops waiting for one and goes on to fail honestly.
     gate.discovery_finished()
     outcomes = await asyncio.gather(*strands)
+
+    if topical and not opens_topical:
+        # §0.1: a document nobody opened is a suppression, not an absence.
+        # Triage already said *why* each one is topical; this says what
+        # happened to it as a result.
+        context.research.diagnostics.record_suppression(
+            step="document_triage",
+            reason=SuppressionReason.TOPICAL_UNOPENED,
+            count=len(topical),
+            detail=(
+                "topical documents were classified but never fetched — §4.5 gives them only "
+                "the budget polling leaves, and topicalQuota reserves none"
+            ),
+        )
 
     record_triage_totals(
         context,

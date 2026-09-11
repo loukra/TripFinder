@@ -18,7 +18,7 @@ class ResearchBudget(BaseModel):
     max_posts_per_query: int = Field(default=40, gt=0)
     max_total_posts: int = Field(default=300, gt=0)
     max_comments: int = Field(default=12000, gt=0)
-    max_comments_per_document: int = Field(default=200, gt=0)
+    max_comments_per_document: int = Field(default=400, gt=0)
     """How much of one thread the corpus may consist of (plan §2.14.2).
 
     Breadth, not depth. The measured run took comments in document order
@@ -31,18 +31,28 @@ class ResearchBudget(BaseModel):
     200 x 300 documents is why ``max_comments`` is 12000: the cap only
     helps if there is budget left for the threads it frees up.
     """
-    topical_quota: float = Field(default=0.15, ge=0.0, le=1.0)
+    topical_quota: float = Field(default=0.0, ge=0.0, le=1.0)
     """The share of each budget reserved for topical material (plan §4.5).
 
-    §4.5 gives topical threads budget priority *behind* polling ones, which
-    the sequential pipeline expressed as an ordering: polling documents were
-    fetched first and pre-filtered first, and topical spent what was left.
-    Arrival-order processing cannot express it that way, so it becomes a
-    reservation — and the reservation is better than what it replaces, in
-    both directions. The measured sequential run gave topical documents
-    *nothing at all* (`topical_comments_retrieved: 0`), and the first
-    concurrent run gave them roughly 770 of 2490 analysis calls, starving
-    the corpus that decides the ranking. A quota has a floor and a ceiling.
+    §4.5 is explicit: *"Topical contexts consume only leftover budget, since
+    they cannot change the ranking."* This was briefly 0.15 — a reservation
+    rather than leftovers — on the reasoning that arrival-order processing
+    cannot express "polling first". The measured consequence was that
+    topical material took exactly its 15%: 1800 of 4024 admitted comments,
+    and 1341 of 2231 opinions were evidence-only, in a run whose top result
+    reached 46 supporters against a target of 100.
+
+    **Nothing consumes that corpus.** §4.5 keeps topical material for two
+    jobs, explanations and displayed counter-evidence. Phase 12's
+    explanations draw their quotes from ``counted_resolutions`` — the
+    polling corpus — and ``evidence_opinions`` is written by user
+    deduplication and read by no step, no API field and no view. Until one
+    of those two jobs is built, a non-zero quota buys fetches, analysis
+    calls and entity resolutions whose output reaches nobody.
+
+    Raising it again is a deliberate act: it takes budget from the corpus
+    that decides the ranking, and §4.5 says that is the wrong direction
+    while polling contexts are scarce.
     """
 
     max_ai_analysis_items: int = Field(default=8000, gt=0)

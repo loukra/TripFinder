@@ -40,6 +40,7 @@ from tripfinder.domain.models import (
     ReasonCode,
     SourceDocument,
     Stance,
+    SuppressionReason,
     TriageVerdict,
 )
 from tripfinder.domain.ports import WebSearchHit, WebSearchQuery
@@ -314,15 +315,46 @@ class TestTheRunWideBudgets:
         assert len(outcomes) == 2
         assert context.research.statistics["documents_triaged"] == 2
 
-    async def test_evidence_documents_draw_on_their_own_quota(self) -> None:
+    async def test_evidence_spends_the_share_it_is_given_and_no_more(self) -> None:
         """Plan §4.5: topical threads may not buy capacity away from the
-        corpus that decides the ranking, and must not be starved either."""
-        context = _context(model=Model(turns=3, verdict=TriageVerdict.TOPICAL))
+        corpus that decides the ranking. A run that wants evidence material
+        sets a share, and gets exactly that share."""
+        context = _context(
+            model=Model(turns=3, verdict=TriageVerdict.TOPICAL),
+            budget=ResearchBudget(
+                max_search_queries=3, max_comments_per_document=100, topical_quota=0.5
+            ),
+        )
 
         await run_strands(context, batch_size=20, max_concurrent_calls=8)
 
         assert context.data["counted_analyses"] == []
         assert len(context.data["evidence_analyses"]) > 0
+
+    async def test_topical_documents_are_not_opened_when_nothing_is_left_for_them(
+        self,
+    ) -> None:
+        """§4.5's "leftover budget", as the money it actually saves.
+
+        The fetch is the first cost and it is paid before a comment can be
+        refused, so a strand that could never admit one must not be started.
+        The documents are still triaged — the polling/topical ratio is a
+        §4.5 finding, and it cannot be measured by not looking."""
+        source = Source()
+        context = _context(model=Model(turns=3, verdict=TriageVerdict.TOPICAL), source=source)
+
+        await run_strands(context, batch_size=20, max_concurrent_calls=8)
+
+        assert context.data["evidence_analyses"] == []
+        assert source.fetched == []
+        assert context.research.statistics["documents_triaged"] == 3
+        assert context.research.statistics["documents_topical"] == 3
+        (entry,) = [
+            suppression
+            for suppression in context.research.diagnostics.suppressions
+            if suppression.reason is SuppressionReason.TOPICAL_UNOPENED
+        ]
+        assert entry.count == 3
 
 
 class TestTheQuotaIsRealConfig:
@@ -345,7 +377,6 @@ class TestTheQuotaIsRealConfig:
         # was analysed — and the refusal is recorded, not silent.
         assert context.data["evidence_analyses"] == []
         assert any(
-            suppression.reason.value == "budget_max_comments"
-            and "evidence" in (suppression.detail or "")
+            suppression.reason is SuppressionReason.TOPICAL_UNOPENED
             for suppression in context.research.diagnostics.suppressions
         )

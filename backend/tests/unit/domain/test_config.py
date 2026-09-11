@@ -19,9 +19,9 @@ def test_research_budget_defaults_match_plan() -> None:
     assert budget.max_posts_per_query == 40
     assert budget.max_total_posts == 300
     assert budget.max_comments == 12000
-    assert budget.max_comments_per_document == 200
+    assert budget.max_comments_per_document == 400
     assert budget.max_ai_analysis_items == 8000
-    assert budget.topical_quota == 0.15
+    assert budget.topical_quota == 0.0
     assert budget.max_research_duration_seconds == 180
     assert budget.tail_reserve_seconds == 40
     assert budget.max_estimated_cost_usd == 0.50

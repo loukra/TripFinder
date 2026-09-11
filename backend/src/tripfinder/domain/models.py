@@ -360,6 +360,7 @@ class SuppressionReason(StrEnum):
     TRIAGE_EXCLUDED = "triage_excluded"
     TRIAGE_NOT_POLLING = "triage_not_polling"
     TRIAGE_NO_VERDICT = "triage_no_verdict"
+    TOPICAL_UNOPENED = "topical_unopened"
     BUDGET_MAX_TOTAL_POSTS = "budget_max_total_posts"
     BUDGET_MAX_COMMENTS = "budget_max_comments"
     BUDGET_MAX_AI_ANALYSIS_ITEMS = "budget_max_ai_analysis_items"
