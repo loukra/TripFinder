@@ -276,6 +276,80 @@ describe("Home page, while a run is still counting", () => {
     expect(screen.getByText("4,200")).toBeInTheDocument();
   });
 
+  // A single failed status fetch — the API restarting, a dropped
+  // connection — used to stop polling dead, leaving the last provisional
+  // snapshot on screen under a banner still promising it was growing.
+  it("survives a failed status fetch and still lands the finished result", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    let current = statusResponse({ status: "analyzing", message: "Analysing." });
+    let failNext = false;
+    vi.mocked(api.getResearch).mockImplementation(async () => {
+      if (failNext) {
+        failNext = false;
+        throw new api.ApiError(503, "could not check research status");
+      }
+      return current;
+    });
+    let currentResults: ResearchResultsResponse = {
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Still reading.",
+      percentages_suppressed: true,
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], share: null, supporter_count: 6 }],
+    };
+    vi.mocked(api.getResults).mockImplementation(async () => currentResults);
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText(/provisional result/i)).toBeInTheDocument();
+
+    failNext = true;
+    current = statusResponse({ status: "completed", message: "Finished." });
+    currentResults = resultsResponse;
+
+    // The finished answer still arrives, because one blip no longer ends
+    // the page's relationship with the run.
+    expect(await screen.findByText("47")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/provisional result/i)).not.toBeInTheDocument());
+  });
+
+  it("stops claiming to be counting once it has lost the run", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    let failing = false;
+    vi.mocked(api.getResearch).mockImplementation(async () => {
+      if (failing) throw new api.ApiError(503, "could not check research status");
+      return statusResponse({ status: "analyzing", message: "Analysing." });
+    });
+    vi.mocked(api.getResults).mockResolvedValue({
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Still reading.",
+      percentages_suppressed: true,
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], share: null, supporter_count: 6 }],
+    });
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText(/still counting/i)).toBeInTheDocument();
+
+    failing = true;
+
+    // A page that is no longer being updated says so, and stops describing
+    // the numbers as growing — §0.1's failure mode, wearing a UI.
+    expect(await screen.findByText(/stopped getting updates/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/still counting/i)).not.toBeInTheDocument());
+    expect(screen.getByText(/the last one this page received/i)).toBeInTheDocument();
+    expect(screen.getByText("Alaska")).toBeInTheDocument();
+  });
+
   it("drops the provisional ranking if the run then fails", async () => {
     const user = userEvent.setup();
     vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });

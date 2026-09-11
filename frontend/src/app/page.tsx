@@ -36,6 +36,10 @@ interface RunState {
   clarification: ClarificationRequest | null;
 }
 
+// How many status fetches in a row may fail before the page stops claiming
+// to be watching a run. One is a blip; three is a page that has lost the run.
+const MAX_POLL_FAILURES = 3;
+
 const HOW_IT_WORKS = [
   {
     title: "Real discussions",
@@ -58,16 +62,20 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollHandle.current !== null) {
-      clearInterval(pollHandle.current);
-      pollHandle.current = null;
-    }
-  }, []);
-
-  useEffect(() => stopPolling, [stopPolling]);
+  // Consecutive failed status fetches. A single blip — the API restarting,
+  // a dropped connection — is not a reason to abandon a run that is still
+  // working; several in a row are.
+  const [pollFailures, setPollFailures] = useState(0);
+  // Which run the page is currently showing. A status fetch started before
+  // the user cancelled, reset or searched again may land after it, and
+  // applying it would resurrect a status the page has already left — a poll
+  // tick undoing a cancellation the user watched happen.
+  const generation = useRef(0);
+  // A run the page has already seen finish, cancel or fail. A status fetch
+  // in flight when that happened returns the older, still-running status,
+  // and applying it would put a cancelled run back on screen as a live one.
+  // The backend never walks a terminal status backwards; neither may this.
+  const settled = useRef<string | null>(null);
 
   // A run that is still analysing already has a ranking worth showing (plan
   // §2.13), so results are fetched on every tick from that point on, not only
@@ -91,8 +99,11 @@ export default function Home() {
   // action.
   const applyStatus = useCallback(
     async (id: string): Promise<ResearchStatus | null> => {
+      const mine = generation.current;
       try {
         const current = await getResearch(id);
+        if (mine !== generation.current || settled.current === id) return null;
+        if (STOP_POLLING_STATUSES.has(current.status)) settled.current = id;
         setRun({
           id,
           status: current.status,
@@ -102,7 +113,7 @@ export default function Home() {
           clarification: current.clarification,
         });
 
-        if (STOP_POLLING_STATUSES.has(current.status)) stopPolling();
+        setPollFailures(0);
         if (RESULTS_AVAILABLE_STATUSES.has(current.status)) {
           await loadResults(id, !RESULTS_READY_STATUSES.has(current.status));
         } else {
@@ -114,23 +125,18 @@ export default function Home() {
         }
         return current.status;
       } catch (err) {
-        stopPolling();
+        if (mine !== generation.current) return null;
+        setPollFailures((previous) => previous + 1);
         setError(err instanceof ApiError ? err.message : "could not check research status");
         return null;
       }
     },
-    [loadResults, stopPolling]
+    [loadResults]
   );
 
-  function startPolling(id: string) {
-    stopPolling();
-    pollHandle.current = setInterval(() => {
-      void applyStatus(id);
-    }, getPollIntervalMs());
-  }
-
   function handleReset() {
-    stopPolling();
+    generation.current += 1;
+    settled.current = null;
     setRun(null);
     setResults(null);
     setError(null);
@@ -143,10 +149,12 @@ export default function Home() {
     setRun(null);
     setQuery(submittedQuery);
     setSubmitting(true);
+    generation.current += 1;
+    settled.current = null;
     try {
       const created = await createResearch(submittedQuery);
-      const status = await applyStatus(created.id);
-      if (status !== null && !STOP_POLLING_STATUSES.has(status)) startPolling(created.id);
+      setPollFailures(0);
+      await applyStatus(created.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "could not start this research");
     } finally {
@@ -160,8 +168,11 @@ export default function Home() {
     setError(null);
     try {
       await clarifyResearch(run.id, entityGranularity);
-      const status = await applyStatus(run.id);
-      if (status !== null && !STOP_POLLING_STATUSES.has(status)) startPolling(run.id);
+      // `needs_clarification` halts a run without ending it (plan §6): the
+      // answer is exactly what un-settles it.
+      settled.current = null;
+      setPollFailures(0);
+      await applyStatus(run.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "could not submit that answer");
     } finally {
@@ -176,7 +187,11 @@ export default function Home() {
       // The cancel response is itself a full status snapshot (plan §11), so
       // this applies it directly rather than racing a follow-up poll tick.
       const current = await cancelResearch(run.id);
-      stopPolling();
+      // The cancel response is the newest truth about this run; anything
+      // still in flight, or still to be dispatched by an interval that has
+      // not been torn down yet, is older than it.
+      generation.current += 1;
+      if (STOP_POLLING_STATUSES.has(current.status)) settled.current = run.id;
       setRun({
         id: run.id,
         status: current.status,
@@ -198,7 +213,23 @@ export default function Home() {
     }
   }
 
+  const runId = run?.id ?? null;
   const isRunning = run !== null && !STOP_POLLING_STATUSES.has(run.status);
+  const lostTheRun = pollFailures >= MAX_POLL_FAILURES;
+
+  // **The interval belongs to the run, not to the click that started it.**
+  // Started from an event handler, it is orphaned by anything that remounts
+  // the page — a hot reload in development, an error boundary retry — and
+  // the page then sits on its last snapshot for ever, under a banner still
+  // promising that the numbers are growing. That is §0.1's failure mode
+  // wearing a UI: a stalled page that looks like a live one. Owned here, a
+  // mounted page showing a running research is by construction polling one.
+  useEffect(() => {
+    if (runId === null || !isRunning || lostTheRun) return;
+    const handle = setInterval(() => void applyStatus(runId), getPollIntervalMs());
+    return () => clearInterval(handle);
+  }, [runId, isRunning, lostTheRun, applyStatus]);
+
   const awaitingClarification = run !== null && run.status === "needs_clarification" && run.clarification !== null;
   const showResults = run !== null && results !== null;
   const showPlainTerminalMessage = run !== null && !isRunning && !awaitingClarification && !showResults;
@@ -294,7 +325,28 @@ export default function Home() {
                   </section>
                 )}
 
-                {showResults && results && <ResultsView researchId={run.id} data={results} />}
+                {lostTheRun && isRunning && (
+                  <p className="banner banner-degraded">
+                    This page stopped getting updates from the research. What is below is the last
+                    ranking it received, not a finished result — the research itself may still be
+                    running.{" "}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setPollFailures(0);
+                        setError(null);
+                        void applyStatus(run.id);
+                      }}
+                    >
+                      Check again
+                    </button>
+                  </p>
+                )}
+
+                {showResults && results && (
+                  <ResultsView researchId={run.id} data={results} live={!lostTheRun} />
+                )}
 
                 {isRunning && !showResults && !awaitingClarification && (
                   <section className="section" aria-label="Results">

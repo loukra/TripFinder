@@ -7,6 +7,10 @@ import type { ResearchResultsResponse, ResultItem } from "@/lib/types";
 interface ResultsViewProps {
   researchId: string;
   data: ResearchResultsResponse;
+  /** Whether the page is still receiving updates for this run. A provisional
+   *  ranking that is no longer being refreshed must not keep promising that
+   *  its numbers are growing. */
+  live?: boolean;
 }
 
 interface Hold {
@@ -24,7 +28,7 @@ function confidenceBand(confidence: number): { label: string; tagClass: string }
   return { label: "low confidence", tagClass: "tag tag-outline" };
 }
 
-export function ResultsView({ researchId, data }: ResultsViewProps) {
+export function ResultsView({ researchId, data, live = true }: ResultsViewProps) {
   // A provisional list reorders as counts grow (plan §2.13.1), which is
   // honest — except at the moment it moves a row out from under someone who
   // has opened its evidence. So an open evidence panel holds the view where
@@ -88,7 +92,8 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
       <section className="section" aria-label="Results">
         {provisional && (
           <p className="banner banner-provisional">
-            <strong>Provisional result</strong> — still counting.
+            <strong>Provisional result</strong>
+            {live ? " — still counting." : " — the last one this page received."}
           </p>
         )}
         <div className="panel">
@@ -120,7 +125,10 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
           provisional label is behaving as promised. */}
       {provisional && (
         <p className="banner banner-provisional">
-          <strong>Provisional result</strong> — still counting, and these numbers can only grow.
+          <strong>Provisional result</strong>
+          {live
+            ? " — still counting, and these numbers can only grow."
+            : " — the last one this page received."}
           {pool > 0 && ` ${pool} people have given an opinion we can count so far.`}
         </p>
       )}
