@@ -7,6 +7,7 @@ from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.analysis.query_understanding import (
     CLARIFICATION_QUESTION,
     DEFAULT_REJECTION_REASON,
+    GLOBAL_SCOPE,
     EntityGranularityCandidate,
     QueryUnderstandingResponse,
 )
@@ -223,18 +224,21 @@ async def test_confidence_exactly_at_threshold_produces_a_plan_not_clarification
     assert context.data["plan"].granularity_confidence == 0.7
 
 
-async def test_confident_response_missing_scope_raises_instead_of_guessing() -> None:
+async def test_confident_response_missing_scope_defaults_to_global() -> None:
+    """A query naming no place (plan §6) is a valid, worldwide-scoped plan — not a failure."""
     response = QueryUnderstandingResponse(
         is_travel_recommendation_query=True,
-        normalized_query="underrated us states",
-        topic="nature",
+        normalized_query="best hidden gem national parks for hiking",
+        topic="hiking",
         granularity_candidates=[
-            EntityGranularityCandidate(entity_granularity=EntityType.STATE, confidence=0.9)
+            EntityGranularityCandidate(entity_granularity=EntityType.PARK, confidence=0.9)
         ],
     )
 
-    with pytest.raises(ValueError, match="scope"):
-        await QueryUnderstandingStep().run(_context(response))
+    context = await QueryUnderstandingStep().run(_context(response))
+
+    assert context.data["plan"].scope == GLOBAL_SCOPE
+    assert context.research.status == ResearchStatus.DISCOVERING
 
 
 async def test_confident_response_missing_topic_raises_instead_of_guessing() -> None:
@@ -351,13 +355,14 @@ class TestBuildPlanFromPending:
                 budget=ResearchBudget(),
             )
 
-    def test_a_missing_scope_raises_instead_of_guessing(self) -> None:
-        with pytest.raises(ValueError, match="scope"):
-            build_plan_from_pending(
-                self._pending(scope=None),
-                entity_granularity=EntityType.STATE,
-                budget=ResearchBudget(),
-            )
+    def test_a_missing_scope_defaults_to_global(self) -> None:
+        plan = build_plan_from_pending(
+            self._pending(scope=None),
+            entity_granularity=EntityType.STATE,
+            budget=ResearchBudget(),
+        )
+
+        assert plan.scope == GLOBAL_SCOPE
 
     def test_a_missing_topic_raises_instead_of_guessing(self) -> None:
         with pytest.raises(ValueError, match="topic"):

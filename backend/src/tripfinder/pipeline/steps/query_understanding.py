@@ -6,6 +6,10 @@ after that is deterministic: which branch the research takes, and what gets
 built for it. This step never touches ``context.source`` — rejecting or
 asking for clarification therefore costs nothing (plan §10 Phase 5
 acceptance: "a non-travel query is rejected without consuming budget").
+
+A confident plan with no scope (a query naming no specific place) defaults
+to ``GLOBAL_SCOPE`` rather than failing — the prompt already asks the model
+to do this itself; this is the deterministic backstop for when it doesn't.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from collections.abc import Sequence
 from tripfinder.analysis.query_understanding import (
     CLARIFICATION_QUESTION,
     DEFAULT_REJECTION_REASON,
+    GLOBAL_SCOPE,
     EntityGranularityCandidate,
     QueryUnderstandingResponse,
     build_query_understanding_prompt,
@@ -90,15 +95,13 @@ class QueryUnderstandingStep:
             return context
 
         top = candidates[0]
-        if response.scope is None:
-            raise ValueError("Query Understanding returned no scope for a confident plan")
         if response.topic is None:
             raise ValueError("Query Understanding returned no topic for a confident plan")
 
         budget = context.research.research_config.budget
         plan = ResearchPlan(
             normalized_query=response.normalized_query,
-            scope=response.scope,
+            scope=response.scope or GLOBAL_SCOPE,
             entity_granularity=top.entity_granularity,
             granularity_confidence=top.confidence,
             topic=response.topic,
@@ -131,13 +134,11 @@ def build_plan_from_pending(
     )
     if candidate is None:
         raise ValueError(f"{entity_granularity} was not among the offered candidates")
-    if pending.scope is None:
-        raise ValueError("Query Understanding returned no scope for this query")
     if pending.topic is None:
         raise ValueError("Query Understanding returned no topic for this query")
     return ResearchPlan(
         normalized_query=pending.normalized_query,
-        scope=pending.scope,
+        scope=pending.scope or GLOBAL_SCOPE,
         entity_granularity=entity_granularity,
         granularity_confidence=candidate.confidence,
         topic=pending.topic,

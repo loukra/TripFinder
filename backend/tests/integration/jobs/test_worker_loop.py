@@ -16,6 +16,8 @@ from tripfinder.domain.models import FailureKind, Research, ResearchStatus
 from tripfinder.jobs.repository import JobRepository
 from tripfinder.jobs.worker_loop import run_once, run_worker_loop
 from tripfinder.persistence.repositories import ResearchRepository
+from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 
 
 async def test_run_once_processes_a_claimed_job_end_to_end(
@@ -101,6 +103,52 @@ async def test_two_identical_searches_produce_two_distinct_completed_records(
     assert fetched_first.id != fetched_second.id
     assert fetched_first.status == ResearchStatus.COMPLETED
     assert fetched_second.status == ResearchStatus.COMPLETED
+
+
+async def test_research_status_is_persisted_after_each_step_not_only_at_the_end(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this, a real run only writes its status once, at the very
+    end — the API has nothing to report but "pending" for a run's entire
+    duration, even minutes into one that is actively working (plan §7.1)."""
+    research = make_research()
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+    async with session_factory() as session:
+        await JobRepository(session).enqueue(research.id)
+
+    seen_mid_run: list[ResearchStatus] = []
+
+    class _SetsStatusStep:
+        name = "discovers"
+
+        async def run(self, context: PipelineContext) -> PipelineContext:
+            context.research.status = ResearchStatus.DISCOVERING
+            return context
+
+    class _ProbeStep:
+        name = "probe"
+
+        async def run(self, context: PipelineContext) -> PipelineContext:
+            async with session_factory() as session:
+                fetched = await ResearchRepository(session).get(research.id)
+            assert fetched is not None
+            seen_mid_run.append(fetched.status)
+            context.research.status = ResearchStatus.COMPLETED
+            return context
+
+    def _runner(*, on_progress: ProgressListener | None = None) -> PipelineRunner:
+        return PipelineRunner([_SetsStatusStep(), _ProbeStep()], on_progress=on_progress)
+
+    monkeypatch.setattr("tripfinder.jobs.worker_loop.build_pipeline_runner", _runner)
+    monkeypatch.setattr("tripfinder.jobs.worker_loop.build_resumed_pipeline_runner", _runner)
+
+    processed = await run_once(session_factory)
+
+    assert processed is True
+    assert seen_mid_run == [ResearchStatus.DISCOVERING]
 
 
 async def test_run_once_marks_job_and_research_failed_on_pipeline_error(
