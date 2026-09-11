@@ -63,6 +63,11 @@ class _BatchResult(NamedTuple):
     """Items that named no entity in the batch, or named one twice."""
 
 
+def _comparable(quote: str) -> str:
+    """One quote, as it is compared: same words, whitespace collapsed."""
+    return " ".join(quote.split())
+
+
 def _batched(
     entities: Sequence[EntityEvidence], size: int
 ) -> Iterator[Sequence[EntityEvidence]]:
@@ -178,8 +183,9 @@ class SummarizationStep:
             if not self._is_grounded(item, evidence):
                 logger.warning(
                     "summarization: discarding the explanation for %s — it cites a "
-                    "quote not drawn from its stored evidence",
+                    "quote not drawn from its stored evidence: %s",
                     evidence.entity_name,
+                    [quote[:90] for quote in item.cited_quotes] or "(no quote cited at all)",
                 )
                 fabricated_ids.add(item.entity_id)
                 continue
@@ -190,11 +196,20 @@ class SummarizationStep:
         )
 
     def _is_grounded(self, item: EntitySummary, evidence: EntityEvidence) -> bool:
-        """Every cited quote must be one this entity was actually given."""
+        """Every cited quote must be one this entity was actually given.
+
+        Compared with runs of whitespace collapsed, on both sides. The rule
+        this enforces (`PROJECT.md` §29) is *"the model may not cite what it
+        was not given"* — a claim about the words, not about the line breaks
+        between them. A comment quoted across two paragraphs comes back from
+        the model re-wrapped, which is not fabrication and must not be
+        reported as it; a paraphrase still fails, because collapsing
+        whitespace changes no word.
+        """
         if not item.cited_quotes:
             return False
-        known = set(evidence.quotes)
-        return all(quote in known for quote in item.cited_quotes)
+        known = {_comparable(quote) for quote in evidence.quotes}
+        return all(_comparable(quote) in known for quote in item.cited_quotes)
 
     def _record(
         self,

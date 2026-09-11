@@ -201,6 +201,38 @@ class TestHallucinationSafeguard:
         assert result.explanation is None
         assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == [1]
 
+    async def test_a_requoted_line_break_is_not_a_fabrication(self) -> None:
+        """The rule is about the words, not the line breaks between them.
+
+        A comment quoted across two paragraphs comes back from the model
+        re-wrapped. Reporting that as a fabricated quote suppressed every
+        explanation in a real run — five of five — while the quotes were
+        the ones we had handed it, character for character apart from a
+        newline."""
+        stored = "The lakes are unreal.\n\n  Nobody goes in autumn."
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA, quote=stored)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[
+                            _summary(
+                                ALASKA,
+                                cited_quotes=("The lakes are unreal. Nobody goes in autumn.",),
+                            )
+                        ]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        [result] = context.research.results
+        assert result.explanation is not None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == []
+
     async def test_an_explanation_citing_no_quotes_is_ungrounded(self) -> None:
         context = _context(
             results=[_result(ALASKA)],
