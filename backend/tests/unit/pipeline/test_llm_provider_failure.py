@@ -227,7 +227,7 @@ class TestASuccessfulCallStillWorksThroughTheRealAdapter:
 
     async def test_a_valid_answer_produces_a_plan_and_no_failure(self) -> None:
         answer = {
-            "is_travel_recommendation_query": True,
+            "is_recommendation_query": True,
             "rejection_reason": None,
             "normalized_query": "underrated US states for nature",
             "scope": {"type": "country", "value": "United States"},

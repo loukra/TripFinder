@@ -8,6 +8,7 @@ from tripfinder.analysis.query_understanding import (
     CLARIFICATION_QUESTION,
     DEFAULT_REJECTION_REASON,
     GLOBAL_SCOPE,
+    OFF_TOPIC_REJECTION_REASON,
     EntityGranularityCandidate,
     QueryUnderstandingResponse,
 )
@@ -74,7 +75,7 @@ def _context(
 
 async def test_confident_query_produces_a_plan_directly() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="most underrated us states for nature",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -102,7 +103,7 @@ async def test_confident_query_produces_a_plan_directly() -> None:
 
 async def test_ambiguous_query_produces_a_clarification_request() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="most underrated us destinations for nature",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -132,7 +133,7 @@ async def test_ambiguous_query_produces_a_clarification_request() -> None:
 
 async def test_clarification_deduplicates_repeated_candidate_granularities() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us places",
         granularity_candidates=[
             EntityGranularityCandidate(entity_granularity=EntityType.STATE, confidence=0.5),
@@ -148,7 +149,7 @@ async def test_clarification_deduplicates_repeated_candidate_granularities() -> 
 
 async def test_no_candidates_at_all_falls_back_to_clarification() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us places",
         granularity_candidates=[],
     )
@@ -161,7 +162,7 @@ async def test_no_candidates_at_all_falls_back_to_clarification() -> None:
 
 async def test_non_travel_query_is_rejected_without_touching_the_source() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=False,
+        is_recommendation_query=False,
         rejection_reason="This asks for a recipe, not a travel recommendation.",
         normalized_query="best pancake recipe",
     )
@@ -179,7 +180,7 @@ async def test_non_travel_query_is_rejected_without_touching_the_source() -> Non
 
 async def test_rejection_falls_back_to_a_default_reason_when_the_model_gives_none() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=False,
+        is_recommendation_query=False,
         normalized_query="best pancake recipe",
     )
 
@@ -190,7 +191,7 @@ async def test_rejection_falls_back_to_a_default_reason_when_the_model_gives_non
 
 async def test_seed_queries_are_truncated_to_the_search_query_budget() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us states",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -208,7 +209,7 @@ async def test_seed_queries_are_truncated_to_the_search_query_budget() -> None:
 
 async def test_confidence_exactly_at_threshold_produces_a_plan_not_clarification() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us states",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -227,7 +228,7 @@ async def test_confidence_exactly_at_threshold_produces_a_plan_not_clarification
 async def test_confident_response_missing_scope_defaults_to_global() -> None:
     """A query naming no place (plan §6) is a valid, worldwide-scoped plan — not a failure."""
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="best hidden gem national parks for hiking",
         topic="hiking",
         granularity_candidates=[
@@ -243,7 +244,7 @@ async def test_confident_response_missing_scope_defaults_to_global() -> None:
 
 async def test_confident_response_missing_topic_raises_instead_of_guessing() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us states",
         scope=GeoScope(type="country", value="United States"),
         granularity_candidates=[
@@ -258,7 +259,7 @@ async def test_confident_response_missing_topic_raises_instead_of_guessing() -> 
 async def test_an_ambiguous_query_persists_a_pending_plan_and_clarification_on_research() -> None:
     """Plan §6, Phase 13: this is what survives the gap until ``/clarify`` answers it."""
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="most underrated us destinations for nature",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -291,7 +292,7 @@ async def test_an_ambiguous_query_persists_a_pending_plan_and_clarification_on_r
 
 async def test_a_confident_query_does_not_persist_clarification_state() -> None:
     response = QueryUnderstandingResponse(
-        is_travel_recommendation_query=True,
+        is_recommendation_query=True,
         normalized_query="underrated us states",
         scope=GeoScope(type="country", value="United States"),
         topic="nature",
@@ -370,4 +371,60 @@ class TestBuildPlanFromPending:
                 self._pending(topic=None),
                 entity_granularity=EntityType.STATE,
                 budget=ResearchBudget(),
+            )
+
+
+class TestTwoQuestionsNotOne:
+    """The method counts what people recommend; nothing in it is specific to
+    destinations. "Can this be answered by counting opinions?" and "is this
+    about travel?" were one boolean, so the second silently spoke for the
+    first."""
+
+    @staticmethod
+    def _laptops() -> QueryUnderstandingResponse:
+        return QueryUnderstandingResponse(
+            is_recommendation_query=True,
+            is_about_travel=False,
+            normalized_query="which laptops do people actually recommend",
+            topic="laptops",
+            granularity_candidates=[
+                EntityGranularityCandidate(entity_granularity=EntityType.OTHER, confidence=0.9)
+            ],
+        )
+
+    async def test_a_non_travel_recommendation_question_runs_by_default(self) -> None:
+        context = await QueryUnderstandingStep().run(_context(self._laptops()))
+
+        assert context.research.status == ResearchStatus.DISCOVERING
+        assert context.data["plan"].topic == "laptops"
+
+    async def test_the_travel_restriction_rejects_it_when_switched_on(self) -> None:
+        config = ResearchConfig(
+            query_understanding=QueryUnderstandingConfig(restrict_to_travel_queries=True)
+        )
+
+        context = await QueryUnderstandingStep().run(_context(self._laptops(), config=config))
+
+        assert context.research.status == ResearchStatus.REJECTED
+        assert context.data["rejection_reason"] == OFF_TOPIC_REJECTION_REASON
+
+    async def test_what_cannot_be_answered_by_counting_is_rejected_either_way(self) -> None:
+        """The restriction is about subject matter. This is about method:
+        no set of candidates to rank means nothing to count, travel or not."""
+        response = QueryUnderstandingResponse(
+            is_recommendation_query=False,
+            is_about_travel=True,
+            rejection_reason="This asks for one fact, not for what people recommend.",
+            normalized_query="how tall is the eiffel tower",
+        )
+
+        for restrict in (False, True):
+            config = ResearchConfig(
+                query_understanding=QueryUnderstandingConfig(restrict_to_travel_queries=restrict)
+            )
+            context = await QueryUnderstandingStep().run(_context(response, config=config))
+
+            assert context.research.status == ResearchStatus.REJECTED
+            assert context.data["rejection_reason"] == (
+                "This asks for one fact, not for what people recommend."
             )

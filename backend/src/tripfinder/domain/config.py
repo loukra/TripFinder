@@ -142,6 +142,17 @@ class QueryUnderstandingConfig(BaseModel):
     """Query Understanding thresholds (plan §2.4, §6)."""
 
     granularity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    restrict_to_travel_queries: bool = False
+    """Whether a question that is not about travel is rejected before any
+    budget is spent (plan §10 Phase 6 acceptance).
+
+    The method counts what different people recommend; nothing in it is
+    specific to destinations. What *is* specific is everything the counting
+    runs on — the entity catalogue, the granularity tiers and §4.5's alias
+    tables all describe geography — so a non-travel question is read
+    honestly and then resolves almost nothing. Off by default while that is
+    being explored; the gate itself stays, one field away.
+    """
 
 
 class PrefilterConfig(BaseModel):
