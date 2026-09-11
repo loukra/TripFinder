@@ -55,10 +55,20 @@ class SerperSearchProvider:
         await self._http.aclose()
 
     async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        # Clamped rather than passed through: above this ceiling Serper
+        # rejects a `site:`-scoped query outright, and every discovery query
+        # carries one. See ``SerperConfig.max_results_per_query``.
+        num = min(query.limit, self._config.max_results_per_query)
+        if num < query.limit:
+            logger.debug(
+                "serper: asking for %d results instead of %d (provider ceiling)",
+                num,
+                query.limit,
+            )
         body = await self._post(
             {
                 "q": query.query,
-                "num": query.limit,
+                "num": num,
                 "gl": self._config.country,
                 "hl": self._config.language,
             }

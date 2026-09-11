@@ -22,3 +22,17 @@ class SerperConfig(BaseModel):
     """Serper's ``gl`` parameter — which Google locale answers the query."""
     language: str = "en"
     """Serper's ``hl`` parameter."""
+    max_results_per_query: int = Field(default=10, gt=0)
+    """Serper's ceiling for a query carrying a ``site:`` operator.
+
+    Measured, not documented by them: on a free account, ``site:reddit.com``
+    with ``num=10`` succeeds, and the identical query with ``num=25`` is
+    rejected with ``HTTP 400 "Query pattern not allowed for free accounts"``
+    — a message that names the operator but is actually about the
+    combination. Since every discovery query carries that operator (plan
+    §2.11), an unclamped request would fail *every* search and take the whole
+    research down as ``source_unavailable``.
+
+    Ten is also Google's own first page, which is where the relevance is.
+    Raise this if the account is upgraded; it is config for that reason.
+    """

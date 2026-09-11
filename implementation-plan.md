@@ -314,6 +314,15 @@ narrow — which is exactly the argument for the port. `WebSearchProvider` is a 
 `SEARCH_PROVIDER` and **defaulting to `fake`**, mirroring §9's `LLM_PROVIDER` rule so no test run
 and no accidental start-up can spend a quota.
 
+**One measured provider constraint.** On a free Serper account, `site:reddit.com` with `num=10`
+succeeds and the identical query with `num=25` is rejected — `HTTP 400 "Query pattern not allowed
+for free accounts"`, a message that blames the operator but is really about the combination. Since
+every discovery query carries that operator, an unclamped request would fail *every* search and
+land the research on `source_unavailable`. The ceiling therefore lives in `SerperConfig`
+(`max_results_per_query`, default 10) and the provider clamps to it: a provider's own limits belong
+to the provider, not to §1.1's budget. Ten is Google's first page anyway, and `maxSearchQueries 12`
+× 10 still reaches `maxTotalPosts 120`.
+
 **Sections amended:**
 
 - **§1 — "Source"** now reads: *Arctic Shift for retrieval; a web search provider for discovery.*

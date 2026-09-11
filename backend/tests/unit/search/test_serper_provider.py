@@ -13,6 +13,7 @@ response (plan §9).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -87,15 +88,42 @@ class TestASuccessfulSearch:
             calls.append(request)
             return httpx.Response(200, json=ORGANIC_BODY)
 
-        provider = _provider(handler, country="de", language="de")
+        provider = _provider(handler, country="de", language="de", max_results_per_query=25)
 
         await provider.search(WebSearchQuery(query="underrated states", limit=25))
-
-        import json
 
         payload = json.loads(calls[0].content)
         assert payload == {"q": "underrated states", "num": 25, "gl": "de", "hl": "de"}
         assert calls[0].url.path == "/search"
+
+
+class TestTheResultCountIsClampedToTheProviderCeiling:
+    """Measured against the live free tier: ``site:reddit.com`` with ``num=10``
+    succeeds and the same query with ``num=25`` is rejected with HTTP 400.
+    Every discovery query carries that operator, so an unclamped request
+    would fail every search and take the research down as an outage."""
+
+    async def _num_sent(self, *, limit: int, ceiling: int) -> int:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, json=ORGANIC_BODY)
+
+        provider = _provider(handler, max_results_per_query=ceiling)
+        await provider.search(WebSearchQuery(query="underrated states", limit=limit))
+
+        num: int = json.loads(calls[0].content)["num"]
+        return num
+
+    async def test_a_budget_above_the_ceiling_is_clamped_down_to_it(self) -> None:
+        assert await self._num_sent(limit=25, ceiling=10) == 10
+
+    async def test_a_budget_below_the_ceiling_is_passed_through_untouched(self) -> None:
+        assert await self._num_sent(limit=5, ceiling=10) == 5
+
+    async def test_the_default_ceiling_is_the_free_tiers(self) -> None:
+        assert SerperConfig().max_results_per_query == 10
 
     async def test_the_api_key_travels_in_the_header_and_nowhere_else(self) -> None:
         calls: list[httpx.Request] = []
