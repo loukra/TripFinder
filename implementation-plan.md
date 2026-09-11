@@ -673,6 +673,83 @@ way to put it on screen.
 
 ---
 
+### 2.14 One minute, and the first place has a hundred people behind it — **Phase 14.8 added**
+
+Three targets, set by the product owner after running 14.7 against a real corpus. They are
+requirements, not derivations:
+
+1. **The top result carries >= 100 supporters.**
+2. **A settled answer within 60 seconds.**
+3. **Nothing is paid for that the metric cannot use.**
+
+#### 2.14.1 What the targets cost, from measured numbers
+
+The measured run analysed 840 comments and produced a respondent pool of 417, in which the top
+result held 56 — 0.496 respondents per analysed comment, 13.4 % of the pool at the top. A top result
+of 100 therefore needs a pool of ~745 and **~1500 analysed comments: 1.8x, not 3x.**
+
+At 20 comments per call that is 75 calls. Per-call latency is ~25 s and **does not shrink when the
+response does** — §2.12.3 measured a 50.2 % smaller payload at 25.6 s against 23.2 s. Latency is
+fixed cost per call, so the only way 75 calls fit inside a minute is to stop running them in waves:
+**one wave, ~80 in flight, ~25 s**, behind a pre-roll of at most 8 s. Everything else follows from
+that single arithmetic fact.
+
+This is why 14.8 is a pipeline and not a bigger budget. Today's run spends ~135 s before the first
+analysis call is issued — discovery (56.6 s, fully sequential), triage, then retrieval of every
+document — and all of it is dead time the minute cannot afford.
+
+#### 2.14.2 Strands
+
+A **strand** is one document, carried end to end by one task: fetch, cap, pre-filter, analyse,
+accumulate. Strands do not wait for each other, and a strand that fails removes only its own
+contribution. Documents are independent — nothing in retrieval, pre-filtering or the analysis prompt
+reads another document — so the sequential step list for §4.6 steps 5-7 was ordering by habit, not a
+data dependency.
+
+**Two things are genuinely shared, and neither is a barrier.**
+
+- **The purse.** One budget for comments, analysis items and cost. A strand asks for a quota and is
+  answered immediately. Without it a single 4000-comment thread spends everything, which is what
+  §2.12.3's finding 1 observed happening in document order.
+- **The denominator.** One person, one vote holds across strands, so counting is local and the
+  union is global. That union already exists: it is 14.7's snapshot over the accumulated analyses
+  (§2.13.2), unchanged.
+
+Concurrency is bounded on **model calls, not on strands** — that is where the money and the provider's
+rate limit are. Strands are cheap; calls are not.
+
+**§4.5's budget priority becomes a reservation, not an ordering.** Polling-first was implemented as a
+sorted queue, which cannot survive arrival-order processing. A topical quota replaces it, and is
+strictly better than what it replaces: in the measured run topical documents received *nothing*
+(`topical_comments_retrieved: 0`), because polling documents consumed the whole budget first.
+
+**§8.1's health assessment becomes a gate plus a continuous reading.** It ran as a barrier between
+retrieval and analysis precisely so that money is not spent on a corpus a broken source produced.
+Streaming cannot keep the barrier, so it keeps the guarantee a different way: no analysis call is
+admitted until `minPostsRetrieved` documents have been fetched successfully, and the assessment is
+re-read as the run proceeds. `assess_source_health` is already a pure function over the recorder's
+snapshot, so this is a call-site change. §2.13.2 covers the rest: a snapshot is display state, and a
+run that reaches `source_unavailable` clears it.
+
+#### 2.14.3 Not paying for what the metric discards
+
+The measured run extracted 2197 entity mentions and **discarded 1256 of them as off-granularity —
+57 %** — because the analysis prompt asks for every place at every tier while a state-tier question
+can use only one. The prompt carries the plan's granularity. This is a **cost** change, and the plan
+says so plainly: §2.12.3 already established that a smaller response is not a faster one, and no
+latency claim is made for it here.
+
+#### 2.14.4 Out of scope
+
+**Stability across runs is not claimed by this phase.** It is a real defect — the corpus is drawn by
+an agentic discovery loop that proposes different queries each run, so two runs of one query sample
+different threads — and the measured pool of 417 additionally leaves ranks 2 through 8 statistically
+inseparable (New York vs Oregon: 0.65 sigma). 14.8 makes runs *bigger and faster*, which narrows the
+second problem and not the first. Naming it here so that a later phase inherits a stated problem
+rather than rediscovering it.
+
+---
+
 ## 3. Architecture
 
 Unchanged from `PROJECT.md` §4–6: **Modular Monolith + Ports & Adapters + Research Pipeline +
@@ -1208,7 +1285,8 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | **14.5** | **Search-backed discovery** | 6, 14 | **§2.11. `WebSearchProvider` port, fake + Serper impls, `SEARCH_PROVIDER` default fake, Reddit-URL → post-id extraction, batch hydration via `posts/ids`, discovery step rewritten, §8.1 accounting over both dependencies** |
 | **14.6** | **Throughput and sampling breadth** | 14.5 | **§2.12. Enum reason codes replace prose, concurrent analysis batches, configurable `reasoning.effort` (default `low`), per-batch failure isolation, per-thread sampling with comment `score`, `maxResearchDuration` enforced as an admission gate (in-flight work always finishes), fuzzy quote verification + audit trail** |
 | **14.7** | **Streaming provisional results** | 14.6 | **§2.13. Snapshot function re-running steps 8-11 over the partial corpus with no model call, a snapshot emitted after every analysis batch (single-flight, coalesced, sequence-guarded), `analyzing` served by `/results` as `provisional` with `share: null` and the weak list alongside, a provisional results view that fills before it reorders** |
-| 15 | Evaluation | 14.6, 14.7 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
+| **14.8** | **Parallel strands** | 14.7 | **§2.14. One document = one strand, carried end to end and concurrently; shared budget and shared denominator replace the sequential step list for §4.6 steps 5-7; per-document comment cap; topical quota replaces polling-first ordering; health gate plus continuous reading; granularity-restricted analysis prompt** |
+| 15 | Evaluation | 14.6, 14.7, 14.8 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
 
@@ -1315,6 +1393,17 @@ underrated European road-trip regions; best regions for cycling and nature. For 
 sample of retrieved comments by hand, measure relevance precision, check entity resolution and
 deduplication, compare ranking against manually reviewed evidence, record cost and latency.
 **Identify the weakest stage before optimizing anything** (`PROJECT.md` §27).
+
+**Phase 14.8 — acceptance (§2.14):** the three targets are measured on one real run, not argued.
+**(a)** the top result carries **>= 100 supporters** and the respondent pool is **>= 745**;
+**(b)** the run reaches a settled answer **within 60 s**, of which at most **8 s** precede the first
+analysis call; **(c)** **>= 60 documents** contribute counted comments, against 12 in the §2.12.3
+run; **(d)** a strand failed on purpose removes **only its own contribution**, the run still reports,
+and the loss is visible in `diagnostics.suppressions` — the §0.1 test, run against a concurrent
+pipeline rather than a sequential one; **(e)** no model call is admitted after the dispatch deadline,
+and none is admitted before `minPostsRetrieved` documents have been fetched; **(f)**
+`entity_mentions_off_granularity` falls to **under 10 %** of `entity_mentions_total`, from 57 %.
+Stability across runs is explicitly **not** an acceptance criterion (§2.14.4).
 
 ---
 
