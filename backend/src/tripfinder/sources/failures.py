@@ -1,7 +1,10 @@
 """Classifying adapter failures into §8.1's ``failure_kinds`` vocabulary.
 
 Lives in ``sources/`` because it is a fact about adapters, and is consumed
-by ``pipeline/`` health accounting — never the other way round.
+by ``pipeline/`` health accounting and by ``search/`` — never the other way
+round. It reads the label off the exception rather than matching types, so
+it classifies a ``WebSearchError`` exactly as it classifies an
+``ArcticShiftUnavailableError``, without knowing either exists.
 """
 
 from __future__ import annotations

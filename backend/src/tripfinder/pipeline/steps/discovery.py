@@ -1,33 +1,37 @@
-"""Agentic Source Discovery (plan §4.6 step 3): a bounded multi-search loop
-through the source tool boundary (plan §3.1).
+"""Agentic Source Discovery (plan §4.6 step 3, rebuilt on web search by §2.11).
 
-The LLM proposes one query per turn; everything that bounds the loop is
-deterministic. Four guarantees, each load-bearing for the acceptance
-criteria in plan §10 Phase 6:
+Two halves, in order:
+
+1. **Find addresses.** The LLM proposes one plain-language query per turn;
+   the tool boundary restricts it to Reddit, runs it, and returns post ids.
+2. **Hydrate them.** One batched call to the source adapter turns the
+   collected ids into real ``SourceDocument``s.
+
+Everything that bounds the loop is deterministic. Four guarantees, each
+load-bearing for plan §10 Phase 6 and Phase 14.5 acceptance:
 
 * the loop never issues more than ``budget.max_search_queries`` searches;
-* a query that is a near-duplicate of one already searched *in the same
-  subreddit* is never sent to the source — the turn is spent, but no search
-  call is wasted;
-* a turn naming no subreddit, or one outside the plan's
-  ``candidate_subreddits``, is never sent either — Arctic Shift's live
-  search API requires a subreddit/author/link_id/parent_id to scope a
-  full-text query (plan §8), so an unscoped query would only fail at the
-  source;
+* a query that is a near-duplicate of one already searched is never sent;
 * the loop still terminates even if the LLM keeps proposing unproductive
-  turns, because a run of them aborts discovery early.
+  turns, because a run of them aborts discovery early;
+* both external services are recorded separately in §8.1 health accounting,
+  so a run that found nothing because search was down is distinguishable
+  from one that searched properly and found little (plan §0.1).
 """
 
 from __future__ import annotations
 
+import logging
 import re
 
 from tripfinder.analysis.discovery import DiscoveryTurnResponse, build_discovery_prompt
 from tripfinder.domain.models import ResearchPlan, ResearchStatus, SourceDocument
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import get_recorder
-from tripfinder.sources.failures import UNKNOWN_FAILURE_KIND
-from tripfinder.sources.tools import SourceSearchTool
+from tripfinder.search.tools import RedditThreadSearchTool
+from tripfinder.sources.failures import UNKNOWN_FAILURE_KIND, failure_kind
+
+logger = logging.getLogger(__name__)
 
 _DUPLICATE_JACCARD_THRESHOLD = 0.7
 _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS = 3
@@ -55,10 +59,6 @@ def _is_near_duplicate(candidate: str, issued_queries: list[str]) -> bool:
     return False
 
 
-def _normalize_subreddit(name: str) -> str:
-    return name.strip().removeprefix("/r/").removeprefix("r/").strip("/").lower()
-
-
 class AgenticDiscoveryStep:
     """Real implementation of plan §4.6 step 3 (stands in for `FakeDiscoveryStep`)."""
 
@@ -67,21 +67,20 @@ class AgenticDiscoveryStep:
     async def run(self, context: PipelineContext) -> PipelineContext:
         plan: ResearchPlan = context.data["plan"]
         budget = context.research.research_config.budget
-        tool = SourceSearchTool(context.source, limit_per_query=budget.max_posts_per_query)
-        valid_subreddits = {_normalize_subreddit(name) for name in plan.candidate_subreddits}
+        tool = RedditThreadSearchTool(context.search, limit_per_query=budget.max_posts_per_query)
+        # Discovery calls two external services, and §8.1 accounts for each
+        # under its own name — the aggregate is what the floors are applied
+        # to, but the snapshot has to say which one failed.
+        recorder = get_recorder(context)
 
         issued_queries: list[str] = []
-        issued_by_subreddit: dict[str, list[str]] = {}
-        documents: dict[str, SourceDocument] = {}
+        post_ids: list[str] = []
         consecutive_unproductive_turns = 0
-        # Discovery searches are source calls like any other, so they count
-        # toward the §8.1 accounting the health assessment reads later.
-        recorder = get_recorder(context)
 
         while len(issued_queries) < budget.max_search_queries:
             turn = await context.llm.complete_structured(
                 prompt=build_discovery_prompt(
-                    plan, issued_queries=issued_queries, documents_found=len(documents)
+                    plan, issued_queries=issued_queries, documents_found=len(post_ids)
                 ),
                 response_model=DiscoveryTurnResponse,
             )
@@ -89,36 +88,58 @@ class AgenticDiscoveryStep:
             if not turn.should_continue or not turn.next_query:
                 break
 
-            subreddit = _normalize_subreddit(turn.subreddit) if turn.subreddit else None
-            if subreddit is None or subreddit not in valid_subreddits:
-                # No scope, or one outside the plan's candidates: the live
-                # source would reject this query anyway (plan §8), so the
-                # turn is spent without spending a search call.
-                consecutive_unproductive_turns += 1
-                if consecutive_unproductive_turns >= _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS:
-                    break
-                continue
-
-            if _is_near_duplicate(turn.next_query, issued_by_subreddit.get(subreddit, [])):
+            if _is_near_duplicate(turn.next_query, issued_queries):
                 consecutive_unproductive_turns += 1
                 if consecutive_unproductive_turns >= _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS:
                     break
                 continue
 
             consecutive_unproductive_turns = 0
-            result = await tool.search(turn.next_query, subreddit=subreddit)
+            result = await tool.search(turn.next_query)
             issued_queries.append(turn.next_query)
-            issued_by_subreddit.setdefault(subreddit, []).append(turn.next_query)
             if result.ok:
-                recorder.record_success(context.source.name)
+                recorder.record_success(context.search.name)
             else:
                 recorder.record_failure(
-                    context.source.name, kind=result.failure_kind or UNKNOWN_FAILURE_KIND
+                    context.search.name, kind=result.failure_kind or UNKNOWN_FAILURE_KIND
                 )
-            for document in result.documents:
-                documents[document.id] = document
+            for post_id in result.post_ids:
+                if post_id not in post_ids and len(post_ids) < budget.max_total_posts:
+                    post_ids.append(post_id)
 
-        context.data["documents"] = list(documents.values())
+            if len(post_ids) >= budget.max_total_posts:
+                break
+
+        documents = await self._hydrate(context, post_ids)
+
+        context.data["documents"] = documents
         context.data["discovery_queries_issued"] = issued_queries
+        context.data["discovery_post_ids_found"] = post_ids
+        # Plan §0.1: the gap between ids found and documents hydrated is
+        # evidence we located and failed to retrieve. It is recorded rather
+        # than left to be inferred from a shorter-than-expected list.
+        context.data["discovery_documents_unhydrated"] = len(post_ids) - len(documents)
         context.research.status = ResearchStatus.RETRIEVING
         return context
+
+    async def _hydrate(
+        self, context: PipelineContext, post_ids: list[str]
+    ) -> list[SourceDocument]:
+        """Turn collected ids into documents, in one batched source call.
+
+        A hydration failure is recorded, not raised: §8.1 decides what an
+        unreachable source means for the run as a whole, and it cannot do
+        that if this step crashes first.
+        """
+        if not post_ids:
+            return []
+
+        recorder = get_recorder(context)
+        try:
+            documents = list(await context.source.fetch_documents(post_ids))
+        except Exception as exc:
+            logger.warning("discovery: hydrating %d post(s) failed: %s", len(post_ids), exc)
+            recorder.record_failure(context.source.name, kind=failure_kind(exc))
+            return []
+        recorder.record_success(context.source.name)
+        return documents

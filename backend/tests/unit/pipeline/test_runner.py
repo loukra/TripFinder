@@ -14,6 +14,7 @@ from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.domain.models import FailureKind, Research, ResearchStatus, Result
 from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEvent
 from tripfinder.pipeline.runner import PipelineRunner
+from tripfinder.search.fake import FakeSearchProvider
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
 
 
@@ -40,7 +41,12 @@ def _context() -> PipelineContext:
         created_at=datetime.now(UTC),
         status=ResearchStatus.PENDING,
     )
-    return PipelineContext(research=research, source=FakeSourceAdapter(), llm=FakeLLMProvider())
+    return PipelineContext(
+        research=research,
+        source=FakeSourceAdapter(),
+        search=FakeSearchProvider(),
+        llm=FakeLLMProvider(),
+    )
 
 
 def test_step_satisfies_pipeline_step_protocol() -> None:

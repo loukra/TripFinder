@@ -30,6 +30,7 @@ from tripfinder.pipeline.steps.retrieval import ContentRetrievalStep
 from tripfinder.pipeline.steps.summarization import SummarizationStep
 from tripfinder.pipeline.steps.triage import DocumentTriageStep
 from tripfinder.pipeline.steps.user_deduplication import UserDeduplicationStep
+from tripfinder.search.factory import build_search_provider
 from tripfinder.settings import Settings
 from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 
@@ -88,13 +89,14 @@ def build_pipeline_context_for(research: Research, *, settings: Settings) -> Pip
     """A context wired to the real adapters this process is configured for.
 
     The source adapter is always Arctic Shift (plan §1 — the MVP's only
-    one); the LLM provider follows ``settings.llm_provider``, which defaults
-    to fake so no process reaches OpenAI without ``LLM_PROVIDER`` set
-    explicitly (plan §9).
+    one). The LLM and search providers follow ``settings``, and both default
+    to fake, so no process reaches OpenAI or Serper without ``LLM_PROVIDER``
+    / ``SEARCH_PROVIDER`` set explicitly (plan §9, §2.11).
     """
     source = ArcticShiftAdapter()
     llm = build_llm_provider(settings.llm_provider, openai_api_key=settings.openai_api_key)
-    context = PipelineContext(research=research, source=source, llm=llm)
+    search = build_search_provider(settings.search_provider, serper_api_key=settings.serper_api_key)
+    context = PipelineContext(research=research, source=source, search=search, llm=llm)
     if research.resume_plan is not None:
         context.data["plan"] = research.resume_plan
     return context

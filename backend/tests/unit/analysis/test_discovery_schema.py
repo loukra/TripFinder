@@ -37,7 +37,7 @@ def test_prompt_lists_already_issued_queries() -> None:
 
     assert "underrated states nature" in prompt
     assert "hidden gem parks" in prompt
-    assert "Documents found so far: 4" in prompt
+    assert "Reddit threads found so far: 4" in prompt
 
 
 def test_prompt_names_no_issued_queries_when_none_yet() -> None:
@@ -55,3 +55,16 @@ def test_response_defaults_to_no_next_query() -> None:
 def test_response_requires_a_non_empty_reasoning() -> None:
     with pytest.raises(ValidationError):
         DiscoveryTurnResponse(should_continue=True, next_query="q", reasoning="")
+
+
+def test_the_turn_schema_no_longer_asks_the_model_for_a_subreddit() -> None:
+    """Plan §2.11: web search needs no scope, and the ``site:`` restriction is
+    the tool's job — a field the model can populate is a field it can get
+    wrong."""
+    assert "subreddit" not in DiscoveryTurnResponse.model_fields
+
+
+def test_the_prompt_tells_the_model_not_to_write_search_operators() -> None:
+    prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+    assert "do not write site:" in prompt

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.pipeline.base import PipelineContext, ProgressEvent
+from tripfinder.search.fake import FakeSearchProvider
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
 
 
@@ -13,7 +14,12 @@ def test_context_starts_with_empty_data_bag_and_progress() -> None:
         status=ResearchStatus.PENDING,
     )
 
-    context = PipelineContext(research=research, source=FakeSourceAdapter(), llm=FakeLLMProvider())
+    context = PipelineContext(
+        research=research,
+        source=FakeSourceAdapter(),
+        search=FakeSearchProvider(),
+        llm=FakeLLMProvider(),
+    )
 
     assert context.data == {}
     assert context.progress == []

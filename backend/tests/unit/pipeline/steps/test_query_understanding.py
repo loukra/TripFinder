@@ -21,7 +21,7 @@ from tripfinder.domain.models import (
     ResearchStatus,
     SourceDocument,
 )
-from tripfinder.domain.ports import SourceSearchQuery
+from tripfinder.domain.ports import WebSearchHit, WebSearchQuery
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.steps.query_understanding import (
     QueryUnderstandingStep,
@@ -37,14 +37,20 @@ class _ForbiddenSourceAdapter:
     async def health_check(self) -> bool:
         raise AssertionError("Query Understanding must never touch the source adapter")
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        raise AssertionError("Query Understanding must never touch the source adapter")
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
         raise AssertionError("Query Understanding must never touch the source adapter")
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         raise AssertionError("Query Understanding must never touch the source adapter")
+
+
+class _ForbiddenSearchProvider:
+    """A WebSearchProvider that fails the test if Query Understanding calls it."""
+
+    name = "forbidden"
+
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        raise AssertionError("Query Understanding must never touch the search provider")
 
 
 def _context(
@@ -57,7 +63,12 @@ def _context(
         research_config=config or ResearchConfig(),
     )
     llm = FakeLLMProvider({QueryUnderstandingResponse: response})
-    return PipelineContext(research=research, source=_ForbiddenSourceAdapter(), llm=llm)
+    return PipelineContext(
+        research=research,
+        source=_ForbiddenSourceAdapter(),
+        search=_ForbiddenSearchProvider(),
+        llm=llm,
+    )
 
 
 async def test_confident_query_produces_a_plan_directly() -> None:

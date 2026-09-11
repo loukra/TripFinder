@@ -5,11 +5,13 @@ This module is the mechanical half of plan §0.1: it is what lets a run that
 source call attempt per adapter, then applies §8.1's four outcome rules to
 the totals.
 
-The rules are written for **N adapters** even though the MVP registers one
-(plan §1). Adding a source later changes the count the rules are applied to,
-never the rules themselves — which is why rule 4 ("some up, some down") needs
-no branch of its own: an adapter that failed every call drags the aggregate
-success rate under the floor, and rule 2 catches it.
+The rules are written for **N adapters**, and since plan §2.11 a run really
+does have two: the web search provider that finds thread addresses and the
+source adapter that retrieves them. Each is recorded under its own name.
+Adding a third changes the count the rules are applied to, never the rules
+themselves — which is why rule 4 ("some up, some down") needs no branch of
+its own: an adapter that failed every call drags the aggregate success rate
+under the floor, and rule 2 catches it.
 """
 
 from __future__ import annotations

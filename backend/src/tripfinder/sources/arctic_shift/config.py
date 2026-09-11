@@ -23,4 +23,6 @@ class ArcticShiftConfig(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0.0)
     health_check_timeout_seconds: float = Field(default=5.0, gt=0.0)
     page_size: int = Field(default=100, gt=0, le=100)
+    max_ids_per_request: int = Field(default=500, gt=0, le=500)
+    """Arctic Shift's documented ceiling for ``/api/posts/ids`` (plan §8)."""
     bot_denylist: list[str] = Field(default_factory=list)

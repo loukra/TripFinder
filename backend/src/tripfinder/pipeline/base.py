@@ -15,7 +15,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from tripfinder.domain.models import Research, ResearchStatus
-from tripfinder.domain.ports import LLMProvider, SourceAdapter
+from tripfinder.domain.ports import LLMProvider, SourceAdapter, WebSearchProvider
 
 
 class ProgressEvent(BaseModel):
@@ -32,6 +32,7 @@ class PipelineContext:
 
     research: Research
     source: SourceAdapter
+    search: WebSearchProvider
     llm: LLMProvider
     data: dict[str, Any] = field(default_factory=dict)
     progress: list[ProgressEvent] = field(default_factory=list)

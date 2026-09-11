@@ -1,8 +1,9 @@
 """Import-boundary test (plan §3.1, §3.2).
 
-``domain/`` and ``ranking/`` may not import from ``sources/``, ``ai/``,
-``persistence/``, ``api/``, or any third-party framework. Walked via AST so
-the check is enforced on source, not on whatever happens to be installed.
+``domain/`` and ``ranking/`` may not import from ``sources/``, ``search/``,
+``ai/``, ``persistence/``, ``api/``, or any third-party framework. Walked via
+AST so the check is enforced on source, not on whatever happens to be
+installed.
 """
 
 import ast
@@ -11,7 +12,7 @@ from pathlib import Path
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "tripfinder"
 PROTECTED_PACKAGES = ("domain", "ranking")
 
-FORBIDDEN_INTERNAL_PACKAGES = ("sources", "ai", "persistence", "api")
+FORBIDDEN_INTERNAL_PACKAGES = ("sources", "search", "ai", "persistence", "api")
 FORBIDDEN_FRAMEWORKS = {
     "fastapi",
     "starlette",
@@ -57,6 +58,7 @@ def test_predicate_flags_known_bad_imports() -> None:
     assert _is_forbidden("fastapi")
     assert _is_forbidden("sqlalchemy.orm")
     assert _is_forbidden("tripfinder.sources.arctic_shift")
+    assert _is_forbidden("tripfinder.search.serper")
     assert _is_forbidden("tripfinder.persistence.repositories")
     assert _is_forbidden("tripfinder.api.routers")
 

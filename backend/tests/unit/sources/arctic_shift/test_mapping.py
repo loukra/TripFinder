@@ -32,7 +32,7 @@ def test_is_bot_author_false_for_ordinary_user() -> None:
 
 
 def test_post_to_document_maps_fields(load_fixture: LoadFixture) -> None:
-    raw = load_fixture("posts_search_success.json")["data"][0]
+    raw = load_fixture("posts_ids_batch.json")["data"][0]
 
     document = post_to_document(raw, source="arctic_shift")
 
@@ -49,7 +49,7 @@ def test_post_to_document_maps_fields(load_fixture: LoadFixture) -> None:
 
 
 def test_post_to_document_raises_for_missing_required_field(load_fixture: LoadFixture) -> None:
-    raw = load_fixture("posts_search_malformed_item.json")["data"][1]
+    raw = load_fixture("posts_ids_malformed_item.json")["data"][1]
 
     with pytest.raises(KeyError):
         post_to_document(raw, source="arctic_shift")

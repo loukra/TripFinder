@@ -9,6 +9,7 @@ from tripfinder.pipeline.fake_pipeline import (
     build_fake_pipeline_context,
     build_fake_pipeline_runner,
 )
+from tripfinder.search.fake import FakeSearchProvider
 
 
 async def test_a_complete_fake_research_runs_query_to_ranked_result_in_under_a_second() -> None:
@@ -51,3 +52,25 @@ async def test_identical_query_run_twice_yields_identical_ranked_results() -> No
     second = await runner.run(build_fake_pipeline_context("underrated states"))
 
     assert first.research.results == second.research.results
+
+
+class TestDiscoveryRunsOnTheFakeSearchProvider:
+    """Plan §10 Phase 14.5 acceptance: a full run reaches ranked results with
+    ``SEARCH_PROVIDER=fake``, no key and no network anywhere."""
+
+    async def test_the_documents_came_through_the_search_provider(self) -> None:
+        context = build_fake_pipeline_context("underrated states")
+        assert isinstance(context.search, FakeSearchProvider)
+
+        result_context = await build_fake_pipeline_runner().run(context)
+
+        assert context.search.queries == ["underrated states"]
+        assert [d.id for d in result_context.data["documents"]] == ["post1", "post2"]
+
+    async def test_a_fixture_address_naming_no_post_never_becomes_a_document(self) -> None:
+        """The fixture list includes a subreddit landing page on purpose."""
+        context = await build_fake_pipeline_runner().run(
+            build_fake_pipeline_context("underrated states")
+        )
+
+        assert len(context.data["documents"]) == 2

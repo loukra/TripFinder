@@ -14,6 +14,7 @@ from tripfinder.pipeline.steps.fake import (
     FakeRetrievalStep,
     FakeUnderstandingStep,
 )
+from tripfinder.search.fake import FakeSearchProvider
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
 from tripfinder.sources.fake.fixtures import fixture_comments, fixture_documents
 
@@ -25,7 +26,12 @@ def _context(llm: FakeLLMProvider | None = None) -> PipelineContext:
         status=ResearchStatus.PENDING,
     )
     source = FakeSourceAdapter(documents=fixture_documents(), comments=fixture_comments())
-    return PipelineContext(research=research, source=source, llm=llm or FakeLLMProvider())
+    return PipelineContext(
+        research=research,
+        source=source,
+        search=FakeSearchProvider(),
+        llm=llm or FakeLLMProvider(),
+    )
 
 
 async def test_understanding_step_normalizes_query_and_advances_status() -> None:

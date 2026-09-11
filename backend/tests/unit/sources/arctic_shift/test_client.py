@@ -39,7 +39,7 @@ async def test_get_returns_body_on_success(
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
@@ -58,7 +58,7 @@ async def test_get_retries_on_429_then_succeeds(
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(429, json={"data": None, "error": "rate limited"})
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
@@ -111,7 +111,7 @@ async def test_get_retries_on_soft_error_body_then_succeeds(
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(200, json=load_fixture("error_soft_timeout.json"))
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
@@ -148,7 +148,7 @@ async def test_get_retries_on_5xx_then_succeeds(
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(503, text="service unavailable")
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
@@ -167,7 +167,7 @@ async def test_get_retries_on_network_error_then_succeeds(
         calls.append(request)
         if len(calls) == 1:
             raise httpx.ConnectError("connection refused", request=request)
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
@@ -181,7 +181,7 @@ async def test_throttle_enforces_minimum_interval_between_requests(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_search_empty.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_empty.json"))
 
     config = ArcticShiftConfig(**fast_config(requests_per_second=20.0))
     client = ArcticShiftClient(config, transport=httpx.MockTransport(handler))
@@ -198,7 +198,7 @@ async def test_health_check_returns_true_on_success(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
