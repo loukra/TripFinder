@@ -31,18 +31,37 @@ class ResearchBudget(BaseModel):
     300 x 25 polling threads is why ``max_comments`` is 8000: the cap only
     helps if there is budget left for the threads it frees up.
     """
-    max_ai_analysis_items: int = Field(default=2500, gt=0)
+    topical_quota: float = Field(default=0.15, ge=0.0, le=1.0)
+    """The share of each budget reserved for topical material (plan §4.5).
+
+    §4.5 gives topical threads budget priority *behind* polling ones, which
+    the sequential pipeline expressed as an ordering: polling documents were
+    fetched first and pre-filtered first, and topical spent what was left.
+    Arrival-order processing cannot express it that way, so it becomes a
+    reservation — and the reservation is better than what it replaces, in
+    both directions. The measured sequential run gave topical documents
+    *nothing at all* (`topical_comments_retrieved: 0`), and the first
+    concurrent run gave them roughly 770 of 2490 analysis calls, starving
+    the corpus that decides the ranking. A quota has a floor and a ceiling.
+    """
+
+    max_ai_analysis_items: int = Field(default=5000, gt=0)
     """The analysis corpus cap (plan §2.14.1).
 
-    2500, from the second measurement rather than the first. 1500 analysed
-    comments produced a pool of 641 with 66 at the top — 10.3 % — so a top
-    result of 100 needs a pool near 970, which at that run's yield of 0.427
-    is about 2270 comments. The yield should also recover once
-    ``max_comments_per_document`` spreads the corpus over more threads, so
-    2500 carries margin rather than being the exact figure.
+    5000, from the third measurement. The second one is why it is not 3000:
+    2490 analysed comments produced a pool of only 669, because the split
+    was not applied to *this* budget and roughly 770 of those calls went to
+    topical material §4.5 forbids from entering the pool. Counted comments
+    therefore received about 1731 of them, and 1731 -> 669 is a yield of
+    0.386.
 
-    Time is not what this spends: the 1500-comment run dispatched every
-    batch and stopped at ``budget_limit_reached``, not at the deadline.
+    With the split fixed, 5000 gives the counted corpus 4250 and a projected
+    pool near 1640. The top result held 8.7 % of that run's pool — a share
+    that has fallen as the corpus broadened, 13.4 % to 10.3 % to 8.7 % — so
+    the margin is deliberate: 8.7 % of 1640 is 142, and even 7 % clears 100.
+
+    Time is still not what this spends. Two consecutive runs stopped at
+    ``budget_limit_reached`` with no batch refused for the deadline.
     """
     max_research_duration_seconds: int = Field(default=300, gt=0)
     tail_reserve_seconds: int = Field(default=60, ge=0)

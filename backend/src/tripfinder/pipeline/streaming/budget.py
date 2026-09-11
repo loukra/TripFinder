@@ -8,7 +8,14 @@ happening in document order.
 Three rules, all of them answered immediately so that asking never means
 waiting:
 
-* ``max_comments`` and ``max_ai_analysis_items`` are run-wide totals;
+* ``max_comments`` and ``max_ai_analysis_items`` are run-wide totals, and
+  **both are split by class**. Splitting only the first one was a measured
+  mistake: a run with 43 topical and 29 polling documents let evidence
+  strands win roughly 770 of 2490 analysis calls first-come-first-served, so
+  the corpus that decides the ranking grew by a fifth of what the budget
+  bought. §4.5 is explicit that topical material may not buy analysis
+  capacity away from it, and the sequential pre-filter enforced exactly that
+  by allocating counted comments their budget first;
 * **topical material draws from a reserved quota, not from what is left
   over** (plan §4.5). Ordering polling-first cannot survive arrival-order
   processing, and in the measured run it gave topical documents *nothing*:
@@ -54,7 +61,7 @@ class RunBudget:
         max_comments: int,
         max_analysis_items: int,
         max_concurrent_calls: int,
-        topical_quota: float = 0.20,
+        topical_quota: float = 0.15,
         deadline: datetime | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -64,8 +71,12 @@ class RunBudget:
             CommentClass.EVIDENCE: evidence_allowance,
         }
         self._spent = {CommentClass.COUNTED: 0, CommentClass.EVIDENCE: 0}
-        self._max_analysis_items = max_analysis_items
-        self._analysis_items_spent = 0
+        evidence_items = int(max_analysis_items * topical_quota)
+        self._analysis_allowance = {
+            CommentClass.COUNTED: max_analysis_items - evidence_items,
+            CommentClass.EVIDENCE: evidence_items,
+        }
+        self._analysis_spent = {CommentClass.COUNTED: 0, CommentClass.EVIDENCE: 0}
         self._deadline = deadline
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -91,25 +102,33 @@ class RunBudget:
         self.comments_refused[comment_class] += wanted - granted
         return granted
 
-    def admit_analysis_batch(self, size: int) -> bool:
+    def admit_analysis_batch(self, size: int, *, comment_class: CommentClass) -> bool:
         """Whether one analysis call of ``size`` comments may still be started.
+
+        Each corpus spends its own allowance, so a run that discovers more
+        topical threads than polling ones cannot shrink the ranking's
+        evidence base (plan §4.5).
 
         The deadline is checked here rather than around the call, because a
         request is billed the moment it is sent: refusing to *start* saves
         money, abandoning a response in flight saves none (§2.12.2).
         """
-        if self._analysis_items_spent + size > self._max_analysis_items:
+        spent = self._analysis_spent[comment_class]
+        if spent + size > self._analysis_allowance[comment_class]:
             self.items_refused_for_budget += size
             return False
         if self._deadline is not None and self._clock() > self._deadline:
             self.items_refused_for_deadline += size
             return False
-        self._analysis_items_spent += size
+        self._analysis_spent[comment_class] += size
         return True
 
     @property
     def analysis_items_spent(self) -> int:
-        return self._analysis_items_spent
+        return sum(self._analysis_spent.values())
+
+    def analysis_items_spent_on(self, comment_class: CommentClass) -> int:
+        return self._analysis_spent[comment_class]
 
     def comments_spent(self, comment_class: CommentClass) -> int:
         return self._spent[comment_class]

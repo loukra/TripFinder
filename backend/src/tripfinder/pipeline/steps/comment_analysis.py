@@ -88,7 +88,7 @@ another adapter in the same recorder, rather than a parallel accounting
 scheme with its own rules to keep in step.
 """
 
-DEFAULT_MAX_CONCURRENT_BATCHES = 32
+DEFAULT_MAX_CONCURRENT_BATCHES = 64
 """Batches in flight at once (plan §2.12, 14.6b).
 
 Derived, not guessed. A 20-comment batch measured 23.2 s at
@@ -101,9 +101,12 @@ answer with 429s that §8.1 has to account for as lost evidence.
 
 Raised to 32 for 14.8 (plan §2.14.1). 16 was measured: 1500 comments, every
 batch dispatched, nothing lost to the deadline — so there was headroom left
-and the analysis budget, not the clock, was the binding limit. 2500 comments
-is 125 calls, which at 16 would be 8 waves and would make the clock binding
-again; 32 keeps it at 4. The arithmetic that sets it changed:
+and the analysis budget, not the clock, was the binding limit. 5000 comments
+is 250 calls. Per-call latency is a fixed ~21 s that does not shrink with
+the payload (§2.12.3), so the only variable is how many waves those calls
+take: at 32 that is 8 waves and about 165 s, at 64 it is 4 and about 85 s.
+The pipeline removed the ~135 s pre-roll that used to sit in front of them,
+so this is now most of a run's wall clock. The arithmetic that sets it changed:
 a top result of 100 supporters needs ~1500 analysed comments, which is 75
 calls, and per-call latency does not shrink when the payload does (§2.12.3).
 Waves are therefore the only variable left. 16 is a deliberate half-step —

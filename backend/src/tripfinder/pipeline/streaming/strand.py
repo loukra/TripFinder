@@ -141,6 +141,7 @@ async def run_strand(
             recorder=recorder,
             plan=plan,
             batch_size=batch_size,
+            comment_class=comment_class,
         )
         return StrandOutcome(
             document_id=document.id,
@@ -195,11 +196,12 @@ async def _analyse(
     recorder: SourceHealthRecorder,
     plan: ResearchPlan,
     batch_size: int,
+    comment_class: CommentClass,
 ) -> _Tally:
     """Analyse this document's share, one admitted batch at a time."""
     analysed = attempted = failed = fabricated = discarded = unanswered = 0
     for batch in batched(comments, batch_size):
-        if not budget.admit_analysis_batch(len(batch)):
+        if not budget.admit_analysis_batch(len(batch), comment_class=comment_class):
             # Budget or deadline. Both are already tallied on the budget,
             # and neither is this strand's failure.
             break

@@ -72,6 +72,7 @@ async def run_strands(
         max_comments=config.budget.max_comments,
         max_analysis_items=config.budget.max_ai_analysis_items,
         max_concurrent_calls=max_concurrent_calls,
+        topical_quota=config.budget.topical_quota,
         deadline=admission_deadline(context),
     )
     accumulator = Accumulator(context)
@@ -234,6 +235,21 @@ def _publish(
         _total(outcomes, "comments_unanswered"),
         "comments sent for analysis that came back without one",
     )
+
+    # Comments a strand was never granted. Tallied by the purse, and
+    # surfaced here — a corpus that shrank because the budget said no has to
+    # be distinguishable from one that was genuinely small (§0.1).
+    for comment_class, refused in budget.comments_refused.items():
+        _record(
+            context,
+            SuppressionReason.BUDGET_MAX_COMMENTS,
+            refused,
+            f"{comment_class.value} comments beyond that corpus's share of the budget",
+        )
+    if budget.comments_refused[CommentClass.COUNTED] or budget.comments_refused[
+        CommentClass.EVIDENCE
+    ]:
+        context.research.diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
 
     if budget.items_refused_for_deadline:
         context.research.diagnostics.record_suppression(

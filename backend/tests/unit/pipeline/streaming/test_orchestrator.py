@@ -323,3 +323,29 @@ class TestTheRunWideBudgets:
 
         assert context.data["counted_analyses"] == []
         assert len(context.data["evidence_analyses"]) > 0
+
+
+class TestTheQuotaIsRealConfig:
+    async def test_the_configured_topical_quota_reaches_the_purse(self) -> None:
+        """A config value nothing reads is a knob that lies. The orchestrator
+        builds the purse, so it is the only place that can honour it."""
+        context = _context(
+            model=Model(turns=4, verdict=TriageVerdict.TOPICAL),
+            budget=ResearchBudget(
+                max_search_queries=4,
+                max_comments_per_document=100,
+                max_ai_analysis_items=100,
+                topical_quota=0.0,
+            ),
+        )
+
+        await run_strands(context, batch_size=20, max_concurrent_calls=8)
+
+        # Every document is topical and topical has no allowance, so nothing
+        # was analysed — and the refusal is recorded, not silent.
+        assert context.data["evidence_analyses"] == []
+        assert any(
+            suppression.reason.value == "budget_max_comments"
+            and "evidence" in (suppression.detail or "")
+            for suppression in context.research.diagnostics.suppressions
+        )
