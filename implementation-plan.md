@@ -72,8 +72,9 @@ amendment, not an implementation detail.
 | LLM provider | **OpenAI**, behind an `LLMProvider` port | User decision. Port keeps §13's replaceability |
 | Default model | **`gpt-5.6-luna`** (see §2.10). Larger tier for query understanding + summaries remains intended | Cost-oriented reasoning tier; per-research cost to be measured in Phase 15 |
 | Model config | Model IDs in config only. **Never in the domain layer** | `PROJECT.md` §13 |
-| Source | **Arctic Shift only** (`https://arctic-shift.photon-reddit.com`) | No API key or approval needed. Official Reddit API requires manual approval since Nov 2025 |
-| Source port | `SourceAdapter` port **is still built**; only one adapter implements it | Preserves §10 without speculative second adapter |
+| Source | **Arctic Shift for retrieval** (`https://arctic-shift.photon-reddit.com`); **a web search provider for discovery** (see §2.11) | No API key or approval needed for Arctic Shift. Its keyword search is measurably unreliable; its ID-based retrieval is not |
+| Search provider | **Serper.dev** (Google results), behind a `WebSearchProvider` port, **defaulting to `fake`** | Google indexes Reddit threads better than any free Reddit search. Port keeps it replaceable (§2.11) |
+| Source port | `SourceAdapter` and `WebSearchProvider` ports are both built | Two external services, two ports; `WebSearchProvider` has two real implementations |
 | Local dev | **Hybrid** — Postgres in Docker, backend/worker/frontend native. Compose `full` profile runs everything | Hot reload where you edit; hermetic Postgres for tests |
 | Testing | pytest (backend), Vitest + Playwright (frontend) | |
 | Lint / format / types | ruff + mypy (strict) backend; eslint + tsc frontend | |
@@ -112,10 +113,12 @@ research **persists the budget it actually ran with** (`PROJECT.md` §21).
 
 ### 1.2 Deferred, deliberately
 
-- **Additional source adapters** (official Reddit API, web search, travel forums, YouTube) —
+- **Additional source adapters** (official Reddit API, travel forums, YouTube) —
   deferred as *future work*, not rejected. `PROJECT.md` §3 makes multi-source the roadmap, and the
-  `SourceAdapter` port exists to serve it. The MVP ships one adapter because one is enough to
-  validate the product, not because the port is speculative. Adding the next source must not
+  `SourceAdapter` port exists to serve it. The MVP ships one source adapter because one is enough
+  to validate the product, not because the port is speculative. (Web search is no longer on this
+  list: §2.11 makes it the discovery mechanism, not a second source of evidence — it supplies
+  thread *addresses*, never content that reaches the corpus.) Adding the next source must not
   require changes to `domain/`, `ranking/`, or the pipeline steps — Phase 15 should include a
   paper exercise confirming that.
 - Embeddings-based pre-filtering — Phase 7 ships heuristic pre-filtering first; add embeddings
@@ -260,6 +263,93 @@ amendment changes one default and nothing else.
 
 ---
 
+### 2.11 Discovery moves to web search — **§1, §4.6, §8, §8.1 amended; Phase 14.5 added**
+
+§8 calls Arctic Shift's full-text search "the key capability" and §4.6 step 3 is built on it.
+Measured against the live service during Phase 14 manual testing, that one capability does not
+work well enough to build a product on. The other endpoints do.
+
+**The measurement** (live `curl`, same machine, interleaved, two different egress IPs):
+
+| Endpoint | Successes | Latency |
+|---|---|---|
+| `/api/posts/search` (keyword) | **1 / 5** | 5.5–11 s, then timeout |
+| `/api/posts/ids` | 6 / 6 | 0.2–1.0 s |
+| `/api/comments/search?link_id=…` | 6 / 6 | 0.2–1.0 s |
+
+This is not rate limiting and not our request volume — changing egress IP changed nothing, and the
+ID-based calls stayed instant throughout the same window. Arctic Shift's own API documentation
+says as much: keyword parameters (`title`, `selftext`, `query`, `body`) are *"only in use with
+author or subreddit parameter (not supported with very active users or subreddits)"*, and its
+timeout guidance tells callers to *"use a more specific filter… this usually happens with body,
+selftext or title parameters."* The service is honest about which half of it is load-bearing.
+
+So: **Arctic Shift is not the wrong source. Its search is the wrong index.** Retrieval — the part
+we actually depend on for evidence — is excellent.
+
+**Resolution: discovery finds threads through a web search provider; Arctic Shift hydrates them.**
+
+```
+LLM proposes a natural-language query
+  → WebSearchProvider.search(query)        # Google results, Reddit threads
+  → extract post ids from the result URLs
+  → SourceAdapter.fetch_documents(ids)     # /api/posts/ids, ≤500 per call
+  → Triage → Retrieval → Analysis → …      # unchanged
+```
+
+Three reasons this is an upgrade rather than a workaround:
+
+1. **It is the reliable path.** Both remaining external calls are the ones measured at 6/6.
+2. **It ranks by relevance, not recency.** The current step sends `sort=desc` and takes the newest
+   matching threads. A search engine returns the threads people actually found useful. For a
+   product whose whole premise is aggregating what people said, that is a better corpus.
+3. **It removes the subreddit-scoping constraint** that §4.6 step 3 currently has to work around
+   by discarding LLM turns that propose no subreddit.
+
+**Provider choice, and why it is behind a port.** The first implementation is **Serper.dev**
+(real Google results, 2,500 free queries, no card required). Google's own Custom Search JSON API
+is closed to new customers, and PullPush refuses automated clients outright, so the field is
+narrow — which is exactly the argument for the port. `WebSearchProvider` is a protocol in
+`domain/ports.py` with two implementations from day one, `fake` and `serper`, selected by
+`SEARCH_PROVIDER` and **defaulting to `fake`**, mirroring §9's `LLM_PROVIDER` rule so no test run
+and no accidental start-up can spend a quota.
+
+**Sections amended:**
+
+- **§1 — "Source"** now reads: *Arctic Shift for retrieval; a web search provider for discovery.*
+  **"Source port"** is no longer "only one adapter implements it": there are now two ports over
+  two external services, and `WebSearchProvider` genuinely has two implementations.
+- **§3.1** gains `search/` (`fake/`, `serper/`), a sibling of `ai/` and for the same reason.
+- **§4.6 step 3** — "Agentic Source Discovery" keeps its budget, its duplicate-query prevention and
+  its unproductive-turn abort. What changes is what a turn issues: a natural-language search query
+  with no required subreddit, and a hydrate call after the loop.
+- **§8** — `/api/comments/search` is no longer "Primary discovery" (it never was, in code: the
+  adapter only ever used `/api/posts/search`). The table becomes: `posts/ids` for hydration,
+  `comments/search?link_id` for comment trees. `posts/search` is dropped.
+- **§8.1** — health accounting now covers **two** external dependencies. It was already written
+  "for N adapters", so the rules do not change; `search` is recorded as its own named entry, and a
+  run whose search provider failed every call is `source_unavailable` by rule 1 exactly as a dead
+  Arctic Shift would be. The §0.1 obligation is unchanged and now has two ways to be breached:
+  *a run that found nothing because search was down must never be described like a run that
+  searched properly and found little.*
+- **§9** — `FakeSearchProvider` joins `FakeLLMProvider` under the same rule: fixture-backed,
+  offline, the default, and able to simulate failure. No test touches Serper.
+- **§10** — new **Phase 14.5**, placed *before* Phase 15 so evaluation measures the fixed
+  pipeline rather than the broken one.
+
+**Phase 14.5 — Search-backed discovery** · depends on 6, 14 · ships: `WebSearchProvider` port,
+`FakeSearchProvider`, Serper adapter, `SEARCH_PROVIDER` + `SERPER_API_KEY` settings, Reddit-URL →
+post-id extraction, `SourceAdapter.fetch_documents` batch hydration, discovery step rewritten onto
+search, §8.1 accounting extended to both dependencies.
+
+**Acceptance:** a full run reaches ranked results using `SEARCH_PROVIDER=fake` with **no network at
+all**; a search provider that fails every call yields `source_unavailable` with no results object,
+not an empty finding; a URL that is not a Reddit post is discarded without a hydrate call; the
+hydrate path batches ≤500 ids per request; the discovery loop still cannot exceed
+`maxSearchQueries` or repeat a near-duplicate query.
+
+---
+
 ## 3. Architecture
 
 Unchanged from `PROJECT.md` §4–6: **Modular Monolith + Ports & Adapters + Research Pipeline +
@@ -279,15 +369,16 @@ TripFinder/
 │   │   ├── domain/          # pure. no I/O, no framework imports.
 │   │   │   ├── models.py            # Research, Entity, Comment, Opinion, Result
 │   │   │   ├── config.py            # ResearchBudget, ResearchConfig
-│   │   │   └── ports.py             # SourceAdapter, LLMProvider protocols
+│   │   │   └── ports.py             # SourceAdapter, WebSearchProvider, LLMProvider protocols
 │   │   ├── pipeline/
 │   │   │   ├── base.py              # PipelineStep protocol, context, progress
 │   │   │   ├── runner.py
 │   │   │   └── steps/               # one module per step
 │   │   ├── sources/
 │   │   │   ├── tools.py             # agent-facing tool boundary
-│   │   │   ├── arctic_shift/        # the only adapter
+│   │   │   ├── arctic_shift/        # retrieval adapter
 │   │   │   └── fake/                # fixture-backed adapter for tests
+│   │   ├── search/                  # WebSearchProvider impls (serper, fake) — §2.11
 │   │   ├── analysis/                # prompts, schemas, entity resolution
 │   │   ├── ranking/                 # weighting, aggregation, ranking. pure.
 │   │   ├── ai/                      # LLMProvider impls (openai, fake)
@@ -436,7 +527,7 @@ branch to clarification (§6), and **Document Triage is added** as its own step.
 |---|---|---|---|
 | 1 | Query Understanding | **AI** | → plan · clarification · rejection |
 | 2 | Research Planning | no | Budget allocation |
-| 3 | Agentic Source Discovery | **AI** | Bounded, via source tools |
+| 3 | Agentic Source Discovery | **AI** | Bounded, via the web search tool; hydrated through the source adapter (§2.11) |
 | 4 | **Source Document Triage** | **AI** + rules | **New — §4.7. Gates everything downstream** |
 | 5 | Content Retrieval | no | Comment trees for surviving documents only |
 | 6 | Cheap Pre-filtering | no | Heuristics; embeddings deferred |
@@ -626,14 +717,17 @@ passed. Otherwise the shortfall is attributed to the source, never to Reddit's o
 
 Base URL `https://arctic-shift.photon-reddit.com`. No authentication.
 
+**Retrieval only** since §2.11 — discovery happens through the web search provider, and no endpoint
+below performs a keyword search.
+
 | Endpoint | Use |
 |---|---|
-| `/api/comments/search` | **Primary discovery.** Full-text search over comment bodies |
-| `/api/posts/search` | Thread-level discovery |
-| `/api/comments/tree` | Full comment tree for a post (up to 25k) |
+| `/api/posts/ids` | **Hydration.** Up to 500 post ids per call — the ids discovery extracted from search results |
+| `/api/comments/search?link_id=…` | Comment tree for one post |
 | `/api/subreddits/search` | Find relevant communities |
 
-Comment-body search is the key capability — it searches the actual unit of evidence directly.
+The ID-addressed endpoints are the reliable half of this service (§2.11): measured 6/6 successes at
+0.2–1.0 s, against 1/5 at 5.5–11 s for keyword search.
 
 **Adapter responsibilities** (`PROJECT.md` §11): retries with exponential backoff, 429 handling,
 pagination, response validation, normalization to domain types, deleted/`[deleted]` author
@@ -652,9 +746,12 @@ denylist, before analysis.
 
 ### 8.1 Failure semantics — when the source is down
 
-Arctic Shift is currently the only adapter, so "all adapters failed" and "Arctic Shift is down" are
-the same event today. The logic is written for **N adapters** so adding sources later changes only
-the count, not the rules.
+Since §2.11 a research depends on **two** external services: the web search provider for discovery
+and Arctic Shift for retrieval. The logic below was already written for **N adapters**, so the
+rules are unchanged — each is recorded under its own name, and either one failing every call is a
+rule-1 `source_unavailable`. Note the asymmetry the rules already handle correctly: a dead search
+provider yields *no documents to retrieve*, which must be reported as an outage and never as a
+query about which Reddit had nothing to say.
 
 **Preflight.** Before any budget or token is spent, the pipeline health-checks every registered
 adapter. If **none** is reachable, the research terminates immediately as `source_unavailable` at
@@ -716,6 +813,10 @@ able to simulate malformed output, refusals, and timeouts. It is the **default p
 `LLM_PROVIDER` must be set explicitly to reach OpenAI (§10 Phase 7.5), so no test run can bill an
 account by accident.
 
+**`FakeSearchProvider`** (§2.11) follows the identical rule: fixture-backed Reddit results,
+offline, able to simulate an empty result set and a total provider outage, and the **default** —
+`SEARCH_PROVIDER` must be set explicitly to reach Serper, so no test run can spend a query quota.
+
 **Golden datasets** for `ranking/`: small hand-calculated fixtures where the expected supporter
 counts, shares, and order are known exactly and asserted to the decimal. `PROJECT.md` §27 Phase 11
 requires this; it is the single most valuable test suite in the project because it protects the
@@ -748,7 +849,8 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | 12 | AI summaries | 11 | Evidence-grounded explanations, traceable to stored quotes |
 | 13 | API hardening | 3.5, 12 | Full endpoints, cancellation, error contract, OpenAPI, **composition root switched to the real pipeline** |
 | 14 | Frontend | 13 | Search, clarification, progress, results, evidence drill-down, empty states |
-| 15 | Evaluation | 14 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
+| **14.5** | **Search-backed discovery** | 6, 14 | **§2.11. `WebSearchProvider` port, fake + Serper impls, `SEARCH_PROVIDER` default fake, Reddit-URL → post-id extraction, batch hydration via `posts/ids`, discovery step rewritten, §8.1 accounting over both dependencies** |
+| 15 | Evaluation | 14.5 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
 
@@ -810,6 +912,14 @@ where keyword matching would fail. Quote verification rejects fabricated spans.
 **Phase 11 — acceptance:** golden datasets produce exactly the expected counts, shares, and
 ordering, **including a fixture where a topical thread's users must not appear in `P`**. Identical input yields byte-identical output across runs. **No LLM is involved in
 ordering** (`PROJECT.md` §29).
+
+**Phase 14.5 — acceptance (§2.11):** a full research reaches ranked results with
+`SEARCH_PROVIDER=fake` and **zero network calls**; a search provider that fails every call yields
+`source_unavailable` with no results object, worded so it cannot be read as "Reddit had little to
+say"; a non-post Reddit URL (subreddit page, user page, comment permalink of an unknown post) is
+discarded before any hydrate call; hydration batches at most 500 ids per request; the discovery
+loop still cannot exceed `maxSearchQueries` or issue a near-duplicate query; §8.1 health records
+the search provider and Arctic Shift separately.
 
 **Phase 15 — benchmarks:** underrated US states for nature; US national parks avoiding crowds;
 underrated European road-trip regions; best regions for cycling and nature. For each: inspect a
