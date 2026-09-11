@@ -384,6 +384,34 @@ class Suppression(BaseModel):
     detail: str | None = None
 
 
+class QuoteVerdict(StrEnum):
+    """What became of one non-exact supporting quote (plan §2.12.1)."""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class QuoteVerification(BaseModel):
+    """One borderline anti-fabrication decision, kept for review (plan §2.12.1).
+
+    Written for every verification that was **not** an exact substring
+    match — accepted and rejected alike. Only recording the rejections would
+    answer half the question: the threshold is worth revisiting both for what
+    it dropped just below the line and for what it admitted just above it.
+    """
+
+    comment_id: str = Field(min_length=1)
+    mention_text: str = Field(min_length=1)
+    """The surface form the discarded or kept mention named."""
+
+    claimed_quote: str = Field(min_length=1)
+    matched_span: str
+    """The closest stretch of the comment, normalised. Empty when nothing matched."""
+
+    similarity: float = Field(ge=0.0, le=1.0)
+    verdict: QuoteVerdict
+
+
 class ResearchFlag(StrEnum):
     """Conditions that make a result set worth questioning (plan §4.7 mitigation 3)."""
 
@@ -436,6 +464,8 @@ class ResearchDiagnostics(BaseModel):
     source_outcome: SourceOutcome | None = None
     triage_decisions: list[TriageDecision] = Field(default_factory=list)
     entity_resolutions: list[EntityResolutionOutcome] = Field(default_factory=list)
+    quote_verifications: list[QuoteVerification] = Field(default_factory=list)
+    """Non-exact anti-fabrication decisions (plan §2.12.1), for Phase 15 to calibrate against."""
     suppressions: list[Suppression] = Field(default_factory=list)
     flags: list[ResearchFlag] = Field(default_factory=list)
     failure: ResearchFailure | None = None

@@ -88,6 +88,19 @@ class EntityResolutionConfig(BaseModel):
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
+class QuoteVerificationConfig(BaseModel):
+    """The anti-fabrication check's tolerance (plan §5, §2.12.1).
+
+    0.90 is a starting threshold with a hand-inspected sample behind it, not
+    a measured optimum: of nine discards read against their comments, six
+    were formatting misses that this admits and three were genuine
+    misattributions that it still rejects. Phase 15 calibrates it from the
+    audit trail, which is why every borderline decision is kept.
+    """
+
+    similarity_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+
+
 class RankingKey(StrEnum):
     """Which computed number decides sort order first (plan §2.5, §4.3).
 
@@ -130,4 +143,5 @@ class ResearchConfig(BaseModel):
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)
+    quote_verification: QuoteVerificationConfig = Field(default_factory=QuoteVerificationConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)

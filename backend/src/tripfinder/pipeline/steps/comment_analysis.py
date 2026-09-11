@@ -6,9 +6,11 @@ relevant it is, what it names, and how warmly.
 
 Two deterministic guards wrap the model's answer.
 
-**Verbatim quote verification** (`PROJECT.md` §29, plan §5). Every
-``supporting_quote`` must appear as an exact substring of the stored comment
-body. A mention whose quote does not is discarded and counted. This is a
+**Quote verification** (`PROJECT.md` §29, plan §5, §2.12.1). Every
+``supporting_quote`` must be findable in the stored comment body — exactly,
+or after normalising both sides and matching at the configured similarity
+threshold. A mention whose quote is not is discarded and counted, and every
+non-exact decision is written to the audit trail either way. This is a
 check, not a prompt instruction: a prompt asks the model not to invent
 evidence, and this makes invented evidence unusable when it asks in vain.
 
@@ -47,8 +49,11 @@ from tripfinder.analysis.comment_analysis import (
     EntityMention,
     build_comment_analysis_prompt,
 )
+from tripfinder.analysis.quote_verification import verify_quote
 from tripfinder.domain.models import (
     Comment,
+    QuoteVerdict,
+    QuoteVerification,
     ReasonCode,
     ResearchFlag,
     ResearchPlan,
@@ -107,6 +112,9 @@ class _BatchResult(NamedTuple):
 
     undispatched: tuple[str, ...] = ()
     """Comments in a batch the deadline refused to admit. Budget-limited, not failed."""
+
+    audit: tuple[QuoteVerification, ...] | list[QuoteVerification] = ()
+    """Every non-exact quote decision this batch made (plan §2.12.1)."""
 
     failure: str | None = None
     """The §8.1 failure kind, when this batch raised instead of answering."""
@@ -185,6 +193,7 @@ class CommentAnalysisStep:
             unanswered.extend(result.unanswered)
             lost.extend(result.lost)
             undispatched.extend(result.undispatched)
+            context.research.diagnostics.quote_verifications.extend(result.audit)
             if result.failure is not None:
                 failures[result.failure] += 1
         self._record_suppressions(context, fabricated, unanswered, lost, undispatched, failures)
@@ -309,6 +318,7 @@ class CommentAnalysisStep:
         analyses: dict[str, CommentAnalysis] = {}
         discarded = 0
         fabricated = 0
+        audit: list[QuoteVerification] = []
         for item in response.items:
             comment = requested.get(item.comment_id)
             if comment is None:
@@ -326,34 +336,61 @@ class CommentAnalysisStep:
                 )
                 discarded += 1
                 continue
-            analysis, rejected = self._verify_quotes(item, comment)
+            analysis, rejected, records = self._verify_quotes(context, item, comment)
             analyses[item.comment_id] = analysis
             fabricated += rejected
+            audit.extend(records)
 
         unanswered = tuple(
             comment_id for comment_id in requested if comment_id not in analyses
         )
-        return _BatchResult(analyses, discarded, fabricated, unanswered, lost=())
+        return _BatchResult(analyses, discarded, fabricated, unanswered, lost=(), audit=audit)
 
     def _verify_quotes(
-        self, item: CommentAnalysis, comment: Comment
-    ) -> tuple[CommentAnalysis, int]:
-        """Keep only the mentions whose quote really appears in the comment body."""
+        self, context: PipelineContext, item: CommentAnalysis, comment: Comment
+    ) -> tuple[CommentAnalysis, int, list[QuoteVerification]]:
+        """Keep only the mentions whose quote is really findable in the comment.
+
+        Returns the audit records rather than writing them, so that batches
+        running concurrently cannot interleave them (14.6b): the caller
+        appends in batch order.
+        """
+        threshold = context.research.research_config.quote_verification.similarity_threshold
         verified: list[EntityMention] = []
+        audit: list[QuoteVerification] = []
+
         for mention in item.mentions:
-            if mention.supporting_quote in comment.body:
+            match = verify_quote(mention.supporting_quote, comment.body)
+            accepted = match.similarity >= threshold
+            if accepted:
                 verified.append(mention)
             else:
                 logger.warning(
                     "analysis: discarding a mention of %r in comment %s — "
-                    "its supporting quote is not in the comment body",
+                    "its supporting quote matches the body at only %.2f",
                     mention.raw_text,
                     comment.id,
+                    match.similarity,
                 )
+            if not match.exact:
+                # Exact substrings are the uninteresting case and there are
+                # thousands of them. What the threshold needs revisiting
+                # against is the borderline — both sides of it (§2.12.1).
+                audit.append(
+                    QuoteVerification(
+                        comment_id=comment.id,
+                        mention_text=mention.raw_text,
+                        claimed_quote=mention.supporting_quote,
+                        matched_span=match.matched_span,
+                        similarity=match.similarity,
+                        verdict=QuoteVerdict.ACCEPTED if accepted else QuoteVerdict.REJECTED,
+                    )
+                )
+
         rejected = len(item.mentions) - len(verified)
         if rejected == 0:
-            return item, 0
-        return item.model_copy(update={"mentions": verified}), rejected
+            return item, 0, audit
+        return item.model_copy(update={"mentions": verified}), rejected, audit
 
     def _record_suppressions(
         self,

@@ -33,10 +33,11 @@ from tripfinder.analysis.comment_analysis import (
     CommentAnalysisBatch,
     EntityMention,
 )
-from tripfinder.domain.config import SourceHealthFloors
+from tripfinder.domain.config import QuoteVerificationConfig, SourceHealthFloors
 from tripfinder.domain.models import (
     EntityType,
     FailureKind,
+    QuoteVerdict,
     ReasonCode,
     ResearchFlag,
     ResearchStatus,
@@ -354,8 +355,8 @@ class TestQuoteVerification:
         assert context.research.statistics["analysis_mentions_fabricated_quote"] == 1
         assert _suppressions(context, SuppressionReason.ANALYSIS_FABRICATED_QUOTE) == [1]
 
-    async def test_verification_is_exact_rather_than_approximate(self) -> None:
-        """A tidied-up quote is still a quote the commenter did not write."""
+    async def test_a_formatting_difference_no_longer_discards_a_real_quote(self) -> None:
+        """§2.12.1: six of nine hand-inspected discards were formatting misses."""
         entry = one("c-clear-1")
         tidied = _mention(supporting_quote="Michigan is hands-down the most underrated state")
         context = _context(
@@ -364,7 +365,101 @@ class TestQuoteVerification:
 
         await CommentAnalysisStep().run(context)
 
+        assert len(context.data["counted_analyses"][0].mentions) == 1
+        assert context.research.statistics["analysis_mentions_fabricated_quote"] == 0
+
+    async def test_an_invented_attribution_is_still_discarded(self) -> None:
+        """The three that were not formatting — and the reason the rule exists.
+
+        A real person's real opinion, attached to a place they did not name,
+        is invisible afterwards: the number, the source and the person are
+        all real.
+        """
+        entry = one("c-clear-1")
+        invented = _mention(supporting_quote="Detroit is the best city in the midwest")
+        context = _context(
+            counted=[entry],
+            responses=[CommentAnalysisBatch(items=[_analysis(entry.id, invented)])],
+        )
+
+        await CommentAnalysisStep().run(context)
+
         assert context.data["counted_analyses"][0].mentions == []
+        assert context.research.statistics["analysis_mentions_fabricated_quote"] == 1
+
+    async def test_the_threshold_is_configuration(self) -> None:
+        entry = one("c-clear-1")
+        invented = _mention(supporting_quote="Detroit is the best city in the midwest")
+        context = _context(
+            counted=[entry],
+            responses=[CommentAnalysisBatch(items=[_analysis(entry.id, invented)])],
+        )
+        context.research.research_config.quote_verification = QuoteVerificationConfig(
+            similarity_threshold=0.0
+        )
+
+        await CommentAnalysisStep().run(context)
+
+        assert len(context.data["counted_analyses"][0].mentions) == 1
+
+
+class TestTheQuoteAuditTrail:
+    """§2.12.1: without it the 0.90 threshold is a guess nobody can revisit."""
+
+    async def test_a_rejected_quote_is_recorded_with_its_score_and_span(self) -> None:
+        entry = one("c-clear-1")
+        invented = _mention(supporting_quote="Detroit is the best city in the midwest")
+        context = _context(
+            counted=[entry],
+            responses=[CommentAnalysisBatch(items=[_analysis(entry.id, invented)])],
+        )
+
+        await CommentAnalysisStep().run(context)
+
+        (record,) = context.research.diagnostics.quote_verifications
+        assert record.verdict is QuoteVerdict.REJECTED
+        assert record.comment_id == entry.id
+        assert record.claimed_quote == "Detroit is the best city in the midwest"
+        assert record.similarity < 0.90
+        assert record.matched_span
+
+    async def test_an_accepted_non_exact_quote_is_recorded_too(self) -> None:
+        """Half the question is what was admitted just above the line."""
+        entry = one("c-clear-1")
+        tidied = _mention(supporting_quote="Michigan is hands-down the most underrated state")
+        context = _context(
+            counted=[entry], responses=[CommentAnalysisBatch(items=[_analysis(entry.id, tidied)])]
+        )
+
+        await CommentAnalysisStep().run(context)
+
+        (record,) = context.research.diagnostics.quote_verifications
+        assert record.verdict is QuoteVerdict.ACCEPTED
+        assert record.similarity >= 0.90
+
+    async def test_an_exact_quote_is_not_recorded(self) -> None:
+        """There are thousands of them and none of them is a borderline case."""
+        context = _context(counted=ALL, responses=[expected_batch(ALL)])
+
+        await CommentAnalysisStep().run(context)
+
+        assert context.research.diagnostics.quote_verifications == []
+
+    async def test_the_trail_survives_serialization(self) -> None:
+        """It reaches the API through the research snapshot, not the logs (§0.1 rule 2)."""
+        entry = one("c-clear-1")
+        invented = _mention(supporting_quote="Detroit is the best city in the midwest")
+        context = _context(
+            counted=[entry],
+            responses=[CommentAnalysisBatch(items=[_analysis(entry.id, invented)])],
+        )
+
+        await CommentAnalysisStep().run(context)
+
+        dumped = context.research.diagnostics.model_dump(mode="json")
+        (record,) = dumped["quote_verifications"]
+        assert record["verdict"] == "rejected"
+        assert 0.0 <= record["similarity"] < 0.9
 
 
 class TestTheReasonCodeBreakdown:
