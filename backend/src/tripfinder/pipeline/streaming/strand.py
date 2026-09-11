@@ -35,6 +35,7 @@ from tripfinder.domain.models import (
 )
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import SourceHealthRecorder
+from tripfinder.pipeline.selection import best_comments
 from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep, batched
 from tripfinder.pipeline.steps.prefilter import drop_reason
 from tripfinder.pipeline.steps.retrieval import fetch_comments
@@ -65,24 +66,6 @@ class StrandOutcome:
     failure: str | None = None
 
 
-def _best(comments: Sequence[Comment], cap: int) -> list[Comment]:
-    """The ``cap`` highest-scoring comments this document holds.
-
-    The cap is what turns a bigger budget into a broader corpus rather than
-    a deeper one. §2.12.3's finding 1 measured the alternative: comments were
-    taken in document order until the budget ran out, so twelve threads
-    supplied a run's entire evidence and sixty-six were never opened.
-
-    Comments whose source reported no score keep the order the adapter left
-    them in — unknown is not zero, but it has to sort somewhere, and "as
-    fetched" invents no ranking of its own.
-    """
-    if cap <= 0 or len(comments) <= cap:
-        return list(comments)
-    ordered = sorted(comments, key=lambda comment: -(comment.score or 0))
-    return ordered[:cap]
-
-
 async def run_strand(
     context: PipelineContext,
     document: SourceDocument,
@@ -105,7 +88,7 @@ async def run_strand(
             # Already recorded as a source failure by ``fetch_comments``.
             return StrandOutcome(document.id, failure="source_fetch_failed")
 
-        capped = _best(fetched, comments_per_document)
+        capped = best_comments(fetched, comments_per_document)
         if len(capped) < len(fetched):
             context.research.diagnostics.record_suppression(
                 step=STRAND_STEP_NAME,

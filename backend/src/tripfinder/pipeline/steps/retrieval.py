@@ -31,6 +31,7 @@ from tripfinder.domain.models import (
 )
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import SourceHealthRecorder, get_recorder
+from tripfinder.pipeline.selection import best_comments
 from tripfinder.sources.failures import failure_kind
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ class ContentRetrievalStep:
     async def run(self, context: PipelineContext) -> PipelineContext:
         polling_documents: list[SourceDocument] = context.data.get("polling_documents", [])
         topical_documents: list[SourceDocument] = context.data.get("topical_documents", [])
-        max_comments = context.research.research_config.budget.max_comments
+        budget = context.research.research_config.budget
+        max_comments = budget.max_comments
+        max_per_document = budget.max_comments_per_document
         diagnostics = context.research.diagnostics
         recorder = get_recorder(context)
 
@@ -53,6 +56,7 @@ class ContentRetrievalStep:
         topical_comments: list[Comment] = []
         documents_retrieved = 0
         comments_dropped_for_budget = 0
+        comments_dropped_per_document = 0
         documents_unvisited = 0
 
         # Polling first, always: topical threads spend only leftover budget.
@@ -71,6 +75,14 @@ class ContentRetrievalStep:
                 continue
             documents_retrieved += 1
 
+            # Breadth before depth (plan §2.14.2). Without this the queue is
+            # drained document by document and the budget is gone before
+            # most threads are opened.
+            capped = best_comments(fetched, max_per_document)
+            if len(capped) < len(fetched):
+                comments_dropped_per_document += len(fetched) - len(capped)
+            fetched = capped
+
             for comment in fetched:
                 if comment.id in seen_comment_ids:
                     diagnostics.record_suppression(
@@ -87,6 +99,13 @@ class ContentRetrievalStep:
 
         # Two different units, so two entries: a suppression's count must
         # mean one thing.
+        if comments_dropped_per_document:
+            diagnostics.record_suppression(
+                step=self.name,
+                reason=SuppressionReason.BUDGET_MAX_COMMENTS,
+                count=comments_dropped_per_document,
+                detail=f"comments beyond each document's cap of {max_per_document}",
+            )
         if comments_dropped_for_budget:
             diagnostics.record_suppression(
                 step=self.name,

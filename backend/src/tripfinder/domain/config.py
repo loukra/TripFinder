@@ -17,14 +17,32 @@ class ResearchBudget(BaseModel):
     max_search_queries: int = Field(default=12, gt=0)
     max_posts_per_query: int = Field(default=25, gt=0)
     max_total_posts: int = Field(default=120, gt=0)
-    max_comments: int = Field(default=4000, gt=0)
-    max_ai_analysis_items: int = Field(default=1500, gt=0)
+    max_comments: int = Field(default=8000, gt=0)
+    max_comments_per_document: int = Field(default=300, gt=0)
+    """How much of one thread the corpus may consist of (plan §2.14.2).
+
+    Breadth, not depth. The measured run took comments in document order
+    until the 4000-comment budget ran out, which filled the corpus from 13
+    of 25 polling threads and left the other 12 — and all 30 topical ones —
+    unopened. Doubling the analysis budget on that corpus *lowered* the
+    yield, from 0.496 respondents per analysed comment to 0.427, because a
+    deeper sample of the same threads is mostly the same people again.
+
+    300 x 25 polling threads is why ``max_comments`` is 8000: the cap only
+    helps if there is budget left for the threads it frees up.
+    """
+    max_ai_analysis_items: int = Field(default=2500, gt=0)
     """The analysis corpus cap (plan §2.14.1).
 
-    1500, not 1000, because the target is arithmetic rather than taste: the
-    measured run turned 840 analysed comments into a respondent pool of 417
-    holding 56 at the top, so a top result of 100 needs a pool near 745 and
-    about 1500 comments to produce it.
+    2500, from the second measurement rather than the first. 1500 analysed
+    comments produced a pool of 641 with 66 at the top — 10.3 % — so a top
+    result of 100 needs a pool near 970, which at that run's yield of 0.427
+    is about 2270 comments. The yield should also recover once
+    ``max_comments_per_document`` spreads the corpus over more threads, so
+    2500 carries margin rather than being the exact figure.
+
+    Time is not what this spends: the 1500-comment run dispatched every
+    batch and stopped at ``budget_limit_reached``, not at the deadline.
     """
     max_research_duration_seconds: int = Field(default=300, gt=0)
     tail_reserve_seconds: int = Field(default=60, ge=0)
