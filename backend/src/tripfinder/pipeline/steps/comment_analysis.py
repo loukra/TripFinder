@@ -39,6 +39,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from typing import NamedTuple
 
+from tripfinder.ai.errors import LLMCredentialError, LLMProviderError
 from tripfinder.analysis.comment_analysis import (
     CommentAnalysis,
     CommentAnalysisBatch,
@@ -47,11 +48,22 @@ from tripfinder.analysis.comment_analysis import (
 )
 from tripfinder.domain.models import Comment, ReasonCode, ResearchPlan, SuppressionReason
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.health import get_recorder, reassess_after_analysis
+from tripfinder.sources.failures import failure_kind
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANALYSIS_BATCH_SIZE = 20
 """Comments per structured call (plan §5)."""
+
+ANALYSIS_ADAPTER = "llm:comment_analysis"
+"""The name analysis batches are accounted under in §8.1's health table.
+
+§8.1 says the LLM is accounted "the same way" as a source, and the outcome
+rules are already written for N adapters — so the analysis call is simply
+another adapter in the same recorder, rather than a parallel accounting
+scheme with its own rules to keep in step.
+"""
 
 DEFAULT_MAX_CONCURRENT_BATCHES = 8
 """Batches in flight at once (plan §2.12, 14.6b).
@@ -81,6 +93,12 @@ class _BatchResult(NamedTuple):
 
     unanswered: tuple[str, ...]
     """Comments this batch asked about and got no verdict for."""
+
+    lost: tuple[str, ...]
+    """Comments whose whole batch failed. Empty unless ``failure`` is set."""
+
+    failure: str | None = None
+    """The §8.1 failure kind, when this batch raised instead of answering."""
 
 
 def _batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
@@ -144,12 +162,17 @@ class CommentAnalysisStep:
         discarded = 0
         fabricated = 0
         unanswered: list[str] = []
+        lost: list[str] = []
+        failures: Counter[str] = Counter()
         for result in results:
             analyses.update(result.analyses)
             discarded += result.discarded
             fabricated += result.fabricated
             unanswered.extend(result.unanswered)
-        self._record_suppressions(context, fabricated, unanswered)
+            lost.extend(result.lost)
+            if result.failure is not None:
+                failures[result.failure] += 1
+        self._record_suppressions(context, fabricated, unanswered, lost, failures)
 
         counted_analyses = _in_order(counted, analyses)
         evidence_analyses = _in_order(evidence, analyses)
@@ -165,6 +188,14 @@ class CommentAnalysisStep:
         )
         statistics["analysis_mentions_fabricated_quote"] = fabricated
         statistics["analysis_items_discarded"] = discarded
+        statistics["analysis_batches_attempted"] = len(batches)
+        statistics["analysis_batches_failed"] = sum(failures.values())
+        statistics["comments_lost_to_errors"] = len(lost)
+
+        # §8.1: the gap between what was sent and what came back is accounted
+        # here, by the step that caused it, rather than left for a later step
+        # to infer from statistics it did not produce.
+        reassess_after_analysis(context, comments_analyzed=len(analyses))
         statistics.update(_reason_code_counts(analyses.values()))
         return context
 
@@ -190,10 +221,36 @@ class CommentAnalysisStep:
         Results come back in batch order, not completion order (see ``run``).
         """
         limit = asyncio.Semaphore(self._max_concurrent_batches)
+        recorder = get_recorder(context)
 
         async def analyse_one(batch: Sequence[Comment]) -> _BatchResult:
             async with limit:
-                return await self._analyse(context, plan, batch)
+                try:
+                    result = await self._analyse(context, plan, batch)
+                except LLMCredentialError:
+                    # Not a property of this batch. A run with no credential
+                    # cannot analyse anything, so isolating it would turn a
+                    # configuration error into a quiet degradation — exactly
+                    # the masquerade §0.1 forbids. It stays fatal.
+                    raise
+                except LLMProviderError as exc:
+                    recorder.record_failure(ANALYSIS_ADAPTER, kind=failure_kind(exc))
+                    logger.warning(
+                        "analysis: a batch of %d comment(s) failed (%s): %s",
+                        len(batch),
+                        exc.kind.value,
+                        exc,
+                    )
+                    return _BatchResult(
+                        analyses={},
+                        discarded=0,
+                        fabricated=0,
+                        unanswered=(),
+                        lost=tuple(comment.id for comment in batch),
+                        failure=exc.kind.value,
+                    )
+                recorder.record_success(ANALYSIS_ADAPTER)
+                return result
 
         return list(await asyncio.gather(*(analyse_one(batch) for batch in batches)))
 
@@ -234,7 +291,7 @@ class CommentAnalysisStep:
         unanswered = tuple(
             comment_id for comment_id in requested if comment_id not in analyses
         )
-        return _BatchResult(analyses, discarded, fabricated, unanswered)
+        return _BatchResult(analyses, discarded, fabricated, unanswered, lost=())
 
     def _verify_quotes(
         self, item: CommentAnalysis, comment: Comment
@@ -257,10 +314,23 @@ class CommentAnalysisStep:
         return item.model_copy(update={"mentions": verified}), rejected
 
     def _record_suppressions(
-        self, context: PipelineContext, fabricated: int, unanswered: Sequence[str]
+        self,
+        context: PipelineContext,
+        fabricated: int,
+        unanswered: Sequence[str],
+        lost: Sequence[str],
+        failures: Counter[str],
     ) -> None:
         """Once, after every batch is in — so the record does not depend on timing."""
         diagnostics = context.research.diagnostics
+        if lost:
+            kinds = ", ".join(f"{kind} x{count}" for kind, count in sorted(failures.items()))
+            diagnostics.record_suppression(
+                step=self.name,
+                reason=SuppressionReason.ANALYSIS_BATCH_FAILED,
+                count=len(lost),
+                detail=f"comments in batches that failed outright ({kinds})",
+            )
         diagnostics.record_suppression(
             step=self.name,
             reason=SuppressionReason.ANALYSIS_FABRICATED_QUOTE,

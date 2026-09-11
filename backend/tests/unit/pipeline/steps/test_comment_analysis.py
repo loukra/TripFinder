@@ -25,21 +25,27 @@ from builders.labeled_comments import (
     one,
 )
 from builders.phase7 import make_context
+from tripfinder.ai.errors import LLMCredentialError, LLMUnavailableError
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.analysis.comment_analysis import (
     CommentAnalysis,
     CommentAnalysisBatch,
     EntityMention,
 )
+from tripfinder.domain.config import SourceHealthFloors
 from tripfinder.domain.models import (
     EntityType,
+    FailureKind,
     ReasonCode,
     ResearchStatus,
+    SourceOutcome,
     Stance,
     SuppressionReason,
 )
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.health import SourceAssessment, get_recorder
 from tripfinder.pipeline.steps.comment_analysis import (
+    ANALYSIS_ADAPTER,
     DEFAULT_MAX_CONCURRENT_BATCHES,
     CommentAnalysisStep,
 )
@@ -60,6 +66,35 @@ class RecordingLLM:
     ) -> T:
         self.prompts.append(prompt)
         return await self._inner.complete_structured(prompt=prompt, response_model=response_model)
+
+
+class FlakyLLM:
+    """Answers each batch in order — or raises, where a failure was scripted."""
+
+    def __init__(self, answers: Sequence[CommentAnalysisBatch | Exception]) -> None:
+        self._answers = list(answers)
+        self._next = 0
+
+    async def complete_structured[T: BaseModel](
+        self, *, prompt: str, response_model: type[T]
+    ) -> T:
+        answer = self._answers[self._next]
+        self._next += 1
+        await asyncio.sleep(0)
+        if isinstance(answer, Exception):
+            raise answer
+        assert isinstance(answer, response_model)
+        return answer
+
+
+def _healthy_assessment() -> SourceAssessment:
+    """What §8.1's health step would have recorded before analysis began."""
+    return SourceAssessment(
+        outcome=SourceOutcome.HEALTHY,
+        aggregate_success_rate=1.0,
+        posts_retrieved=25,
+        comments_analyzed=len(ALL),
+    )
 
 
 class ConcurrencyWatchingLLM:
@@ -469,6 +504,94 @@ class TestTheCountedAndEvidenceCorporaStaySeparate:
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
         assert all(f"id={entry.id}" in llm.prompts[0] for entry in counted)
+
+
+class TestOneFailedBatchDoesNotTakeTheRunWithIt:
+    """Plan §2.12/14.6c. The run before the measured one died at 1487 s on a
+    single OpenAI connection error, throwing away 24 minutes of finished work."""
+
+    def _failing(
+        self, entries: Sequence[LabeledComment], *, fails: Sequence[int], error: Exception
+    ) -> PipelineContext:
+        batches = [(entry,) for entry in entries]
+        answers: list[CommentAnalysisBatch | Exception] = [
+            error if index in fails else expected_batch(batch)
+            for index, batch in enumerate(batches)
+        ]
+        context = make_context(llm=FlakyLLM(answers), status=ResearchStatus.ANALYZING)
+        context.data["counted_comments"] = [entry.as_comment() for entry in entries]
+        context.data["evidence_comments"] = []
+        return context
+
+    async def test_the_other_batches_results_are_kept(self) -> None:
+        context = self._failing(ALL, fails=[1], error=LLMUnavailableError("connection reset"))
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=2).run(context)
+
+        analysed = {analysis.comment_id for analysis in context.data["comment_analyses"]}
+        assert analysed == {entry.id for entry in ALL} - {ALL[1].id}
+
+    async def test_the_loss_is_counted_and_named(self) -> None:
+        context = self._failing(ALL, fails=[0, 2], error=LLMUnavailableError("rate limited"))
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=2).run(context)
+
+        statistics = context.research.statistics
+        assert statistics["analysis_batches_attempted"] == len(ALL)
+        assert statistics["analysis_batches_failed"] == 2
+        assert statistics["comments_lost_to_errors"] == 2
+        assert _suppressions(context, SuppressionReason.ANALYSIS_BATCH_FAILED) == [2]
+
+    async def test_the_failure_kind_reaches_the_health_table(self) -> None:
+        """§8.1: batches attempted, batches failed, failure kinds — like a source."""
+        context = self._failing(ALL, fails=[0], error=LLMUnavailableError("502"))
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=2).run(context)
+
+        recorder = get_recorder(context)
+        (entry,) = [e for e in recorder.snapshot() if e.adapter == ANALYSIS_ADAPTER]
+        assert entry.calls_attempted == len(ALL)
+        assert entry.calls_failed == 1
+        assert entry.failure_kinds == {FailureKind.LLM_UNAVAILABLE: 1}
+
+    async def test_a_missing_credential_is_still_fatal(self) -> None:
+        """Not a property of one batch: no credential means nothing can be analysed,
+        and a configuration error must not arrive as a quiet degradation (§0.1)."""
+        context = self._failing(ALL, fails=[2], error=LLMCredentialError("no API key"))
+
+        with pytest.raises(LLMCredentialError):
+            await CommentAnalysisStep(batch_size=1, max_concurrent_batches=2).run(context)
+
+    async def test_a_run_that_lost_batches_is_distinguishable_from_a_thin_one(self) -> None:
+        """The §0.1 pair, for LLM failure: a lost quarter must not read as a quiet corpus."""
+        floors = SourceHealthFloors(min_comments_analyzed=len(ALL), min_posts_retrieved=0)
+
+        lost = self._failing(ALL, fails=[0, 1], error=LLMUnavailableError("gateway"))
+        lost.research.research_config.source_health_floors = floors
+        lost.data["source_assessment"] = _healthy_assessment()
+
+        thin = _context(counted=ALL, responses=[expected_batch(ALL)])
+        thin.research.research_config.source_health_floors = floors
+        thin.data["source_assessment"] = _healthy_assessment()
+
+        await CommentAnalysisStep(batch_size=1, max_concurrent_batches=2).run(lost)
+        await CommentAnalysisStep().run(thin)
+
+        assert lost.research.diagnostics.source_outcome is SourceOutcome.DEGRADED
+        assert thin.research.diagnostics.source_outcome is SourceOutcome.HEALTHY
+        assert lost.research.statistics["comments_lost_to_errors"] == 2
+        assert thin.research.statistics["comments_lost_to_errors"] == 0
+
+    async def test_losing_nothing_leaves_the_earlier_verdict_alone(self) -> None:
+        context = _context(counted=ALL, responses=[expected_batch(ALL)])
+        context.research.research_config.source_health_floors = SourceHealthFloors(
+            min_comments_analyzed=0, min_posts_retrieved=0
+        )
+        context.data["source_assessment"] = _healthy_assessment()
+
+        await CommentAnalysisStep().run(context)
+
+        assert context.research.diagnostics.source_outcome is SourceOutcome.HEALTHY
 
 
 class TestAnAnswerThatCannotBeMatchedIsDropped:

@@ -350,6 +350,7 @@ class SuppressionReason(StrEnum):
     PREFILTER_EMPTY_BODY = "prefilter_empty_body"
     ANALYSIS_NO_RESULT = "analysis_no_result"
     ANALYSIS_FABRICATED_QUOTE = "analysis_fabricated_quote"
+    ANALYSIS_BATCH_FAILED = "analysis_batch_failed"
     ENTITY_AMBIGUOUS = "entity_ambiguous"
     ENTITY_UNRESOLVED = "entity_unresolved"
     ENTITY_OFF_GRANULARITY = "entity_off_granularity"
