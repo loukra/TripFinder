@@ -26,26 +26,31 @@ export function SearchForm({ onSubmit, disabled }: SearchFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="search-form">
-      <label htmlFor="research-query">What are you trying to find?</label>
-      <input
-        id="research-query"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="e.g. most underrated US states for nature"
-        disabled={disabled}
-        required
-      />
-      <button type="submit" disabled={disabled || query.trim().length === 0}>
-        Search
-      </button>
+      <div className="search-row">
+        {/* The hero heading carries the visible prompt, so the field takes its
+            accessible name from aria-label rather than a second visible label. */}
+        <input
+          id="research-query"
+          className="input"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="most underrated US states for nature"
+          aria-label="What are you trying to find?"
+          disabled={disabled}
+          required
+        />
+        <button type="submit" className="btn btn-primary" disabled={disabled || query.trim().length === 0}>
+          Search
+        </button>
+      </div>
 
       <div className="example-queries">
-        <span>Try:</span>
+        <span className="text-muted example-queries-label">Try</span>
         {EXAMPLE_QUERIES.map((example) => (
           <button
             key={example}
             type="button"
-            className="example-query"
+            className="tag tag-outline example-query"
             disabled={disabled}
             onClick={() => setQuery(example)}
           >

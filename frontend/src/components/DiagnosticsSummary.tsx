@@ -13,6 +13,11 @@ interface DiagnosticsSummaryProps {
 
 // Plan §0.1 rule 2: what a run suppressed must reach the UI, not just the
 // logs. This renders nothing when there is nothing to disclose.
+//
+// The design draws this as a custom button-and-panel accordion; it stays a
+// native <details> here so the disclosure keeps its built-in semantics and
+// its contents remain in the document even while collapsed — a suppression
+// must never be something only a mouse click can discover.
 export function DiagnosticsSummary({ diagnostics }: DiagnosticsSummaryProps) {
   const { source_health: sourceHealth, suppressions, flags } = diagnostics;
   const hasContent = sourceHealth.length > 0 || suppressions.length > 0 || flags.length > 0;
@@ -20,63 +25,72 @@ export function DiagnosticsSummary({ diagnostics }: DiagnosticsSummaryProps) {
 
   return (
     <details className="diagnostics">
-      <summary>Data quality details</summary>
+      <summary>
+        <span>Data quality details</span>
+        {flags.length > 0 && (
+          <span className="tag tag-accent-2">
+            {flags.length} flag{flags.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </summary>
 
-      {flags.length > 0 && (
-        <ul className="diagnostics-flags">
-          {flags.map((flag) => (
-            <li key={flag} className="flag">
-              {FLAG_LABELS[flag] ?? flag}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {sourceHealth.length > 0 && (
-        <table className="diagnostics-table">
-          <caption>Source health</caption>
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Succeeded</th>
-              <th>Failed</th>
-              <th>Success rate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sourceHealth.map((health) => (
-              <tr key={health.adapter}>
-                <td>{health.adapter}</td>
-                <td>{health.calls_succeeded}</td>
-                <td>{health.calls_failed}</td>
-                <td>{Math.round(health.success_rate * 100)}%</td>
-              </tr>
+      <div className="diagnostics-body">
+        {flags.length > 0 && (
+          <ul className="diagnostics-flags">
+            {flags.map((flag) => (
+              <li key={flag} className="flag">
+                {FLAG_LABELS[flag] ?? flag}
+              </li>
             ))}
-          </tbody>
-        </table>
-      )}
+          </ul>
+        )}
 
-      {suppressions.length > 0 && (
-        <table className="diagnostics-table">
-          <caption>Evidence suppressed during this run</caption>
-          <thead>
-            <tr>
-              <th>Step</th>
-              <th>Reason</th>
-              <th>Count</th>
-            </tr>
-          </thead>
-          <tbody>
-            {suppressions.map((suppression, index) => (
-              <tr key={`${suppression.step}-${suppression.reason}-${index}`}>
-                <td>{suppression.step}</td>
-                <td>{suppression.reason.replaceAll("_", " ")}</td>
-                <td>{suppression.count}</td>
+        {sourceHealth.length > 0 && (
+          <table className="table diagnostics-table">
+            <caption>Source health</caption>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Succeeded</th>
+                <th>Failed</th>
+                <th>Success rate</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {sourceHealth.map((health) => (
+                <tr key={health.adapter}>
+                  <td>{health.adapter}</td>
+                  <td>{health.calls_succeeded}</td>
+                  <td>{health.calls_failed}</td>
+                  <td>{Math.round(health.success_rate * 100)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {suppressions.length > 0 && (
+          <table className="table diagnostics-table">
+            <caption>Evidence suppressed during this run</caption>
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Reason</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {suppressions.map((suppression, index) => (
+                <tr key={`${suppression.step}-${suppression.reason}-${index}`}>
+                  <td>{suppression.step}</td>
+                  <td>{suppression.reason.replaceAll("_", " ")}</td>
+                  <td>{suppression.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </details>
   );
 }

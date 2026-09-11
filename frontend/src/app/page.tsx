@@ -34,8 +34,24 @@ interface RunState {
   clarification: ClarificationRequest | null;
 }
 
+const HOW_IT_WORKS = [
+  {
+    title: "Real discussions",
+    body: "The agent searches communities for threads where people answer this kind of question.",
+  },
+  {
+    title: "One person, one vote",
+    body: "Repeat commenters are de-duplicated, so enthusiasm cannot inflate a place.",
+  },
+  {
+    title: "Evidence attached",
+    body: "Every ranking links back to the comments it was counted from.",
+  },
+];
+
 export default function Home() {
   const [run, setRun] = useState<RunState | null>(null);
+  const [query, setQuery] = useState("");
   const [results, setResults] = useState<ResearchResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -93,13 +109,22 @@ export default function Home() {
     }, getPollIntervalMs());
   }
 
-  async function handleSearch(query: string) {
+  function handleReset() {
+    stopPolling();
+    setRun(null);
+    setResults(null);
+    setError(null);
+    setQuery("");
+  }
+
+  async function handleSearch(submittedQuery: string) {
     setError(null);
     setResults(null);
     setRun(null);
+    setQuery(submittedQuery);
     setSubmitting(true);
     try {
-      const created = await createResearch(query);
+      const created = await createResearch(submittedQuery);
       const status = await applyStatus(created.id);
       if (status !== null && !STOP_POLLING_STATUSES.has(status)) startPolling(created.id);
     } catch (err) {
@@ -152,42 +177,90 @@ export default function Home() {
   const showResults = run !== null && results !== null;
   const showPlainTerminalMessage = run !== null && !isRunning && !awaitingClarification && !showResults;
 
+  const kicker = awaitingClarification
+    ? "Before we start"
+    : isRunning
+      ? "Researching"
+      : showResults
+        ? "Results"
+        : "Research outcome";
+
   return (
-    <main className="page">
-      <h1>TripFinder</h1>
-      <p className="tagline">Opinion-based travel research, aggregated from real discussions.</p>
+    <>
+      <header className="site-header">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">TripFinder</span>
+        </div>
+      </header>
 
-      <SearchForm onSubmit={handleSearch} disabled={submitting || isRunning} />
+      <main className="page">
+        {run === null ? (
+          <section className="hero">
+            <p className="hero-kicker">Opinion research</p>
+            <h1 className="hero-title">Ask the people who actually went.</h1>
+            <p className="text-muted hero-lede">
+              TripFinder reads real discussions, counts independent opinions and ranks what comes
+              out. Nothing here is invented.
+            </p>
 
-      {error && <p className="error">{error}</p>}
+            <SearchForm onSubmit={handleSearch} disabled={submitting} />
 
-      {awaitingClarification && run.clarification && (
-        <ClarificationView
-          clarification={run.clarification}
-          onAnswer={handleClarify}
-          submitting={submitting}
-        />
-      )}
+            {error && <p className="error">{error}</p>}
 
-      {isRunning && run && (
-        <ProgressView
-          status={run.status}
-          message={run.message}
-          statistics={run.statistics}
-          onCancel={handleCancel}
-          cancelling={cancelling}
-        />
-      )}
+            <ul className="how-it-works">
+              {HOW_IT_WORKS.map((item) => (
+                <li key={item.title} className="how-card">
+                  <span className="how-card-title">{item.title}</span>
+                  <span className="text-muted how-card-body">{item.body}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : (
+          <>
+            <div className="run-head">
+              <div className="section-head-main">
+                <p className="text-muted section-kicker">{kicker}</p>
+                <h1 className="section-query">{query}</h1>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={handleReset}>
+                New research
+              </button>
+            </div>
 
-      {showPlainTerminalMessage && run && (
-        <section className="terminal-state" aria-label="Research outcome">
-          <p>{run.message}</p>
-        </section>
-      )}
+            {error && <p className="error">{error}</p>}
 
-      {showResults && run && results && <ResultsView researchId={run.id} data={results} />}
+            {awaitingClarification && run.clarification && (
+              <ClarificationView
+                clarification={run.clarification}
+                onAnswer={handleClarify}
+                submitting={submitting}
+              />
+            )}
 
-      {run && !isRunning && <DiagnosticsSummary diagnostics={run.diagnostics} />}
-    </main>
+            {isRunning && (
+              <ProgressView
+                status={run.status}
+                message={run.message}
+                statistics={run.statistics}
+                onCancel={handleCancel}
+                cancelling={cancelling}
+              />
+            )}
+
+            {showPlainTerminalMessage && (
+              <section className="terminal-state" aria-label="Research outcome">
+                <p>{run.message}</p>
+              </section>
+            )}
+
+            {showResults && results && <ResultsView researchId={run.id} data={results} />}
+
+            {!isRunning && <DiagnosticsSummary diagnostics={run.diagnostics} />}
+          </>
+        )}
+      </main>
+    </>
   );
 }

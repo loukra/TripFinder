@@ -105,4 +105,21 @@ describe("ResultsView", () => {
     expect(await screen.findByText("https://reddit.com/r/example/1")).toBeInTheDocument();
     expect(api.getEvidence).toHaveBeenCalledWith("r1", "state:alaska", 10, 0);
   });
+
+  it("bands the numeric confidence into a readable badge", () => {
+    const base = makeData().results[0];
+    const data = makeData({
+      results: [
+        { ...base, entity_id: "a", entity_name: "Alaska", confidence: 0.9 },
+        { ...base, entity_id: "b", entity_name: "Oregon", confidence: 0.5 },
+        { ...base, entity_id: "c", entity_name: "Maine", confidence: 0.1 },
+      ],
+    });
+
+    render(<ResultsView researchId="r1" data={data} />);
+
+    expect(screen.getByText("high confidence")).toBeInTheDocument();
+    expect(screen.getByText("medium confidence")).toBeInTheDocument();
+    expect(screen.getByText("low confidence")).toBeInTheDocument();
+  });
 });
