@@ -223,7 +223,7 @@ class _BatchResult(NamedTuple):
     """The §8.1 failure kind, when this batch raised instead of answering."""
 
 
-def _batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
+def batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
     for start in range(0, len(comments), size):
         yield comments[start : start + size]
 
@@ -276,7 +276,7 @@ class CommentAnalysisStep:
         # Counted comments first, in the §4.5 budget order pre-filter left
         # them in: the corpus that decides the ranking is dispatched before
         # the corpus that only illustrates it.
-        batches = list(_batched(counted + evidence, self._batch_size))
+        batches = list(batched(counted + evidence, self._batch_size))
         emitter = _SnapshotEmitter(context, counted=counted, evidence=evidence)
         results = await self._analyse_all(context, plan, batches, emitter)
 
@@ -378,7 +378,7 @@ class CommentAnalysisStep:
                         undispatched=tuple(comment.id for comment in batch),
                     )
                 try:
-                    result = await self._analyse(context, plan, batch)
+                    result = await self.analyse_batch(context, plan, batch)
                 except LLMCredentialError:
                     # Not a property of this batch. A run with no credential
                     # cannot analyse anything, so isolating it would turn a
@@ -419,10 +419,16 @@ class CommentAnalysisStep:
             )
         )
 
-    async def _analyse(
+    async def analyse_batch(
         self, context: PipelineContext, plan: ResearchPlan, batch: Sequence[Comment]
     ) -> _BatchResult:
-        """One structured call, matched back to the comments it was asked about."""
+        """One structured call, matched back to the comments it was asked about.
+
+        Public because 14.8's strands issue exactly this call (plan §2.14.2).
+        The step keeps owning it: quote verification, the discard rules and
+        the audit trail are the analysis contract (§5), and a strand that
+        re-implemented any of them would be a second contract.
+        """
         response = await context.llm.complete_structured(
             prompt=build_comment_analysis_prompt(plan, batch),
             response_model=CommentAnalysisBatch,

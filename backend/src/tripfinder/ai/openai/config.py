@@ -30,12 +30,22 @@ class ReasoningEffort(StrEnum):
     taking away the thinking is the kind of trade Phase 15 should make on
     evidence, not one to assume up front.
 
-    ``MINIMAL`` is the default from 14.8, for the 60-second target (§2.14.1)
-    — one step down from ``LOW`` rather than the whole way to ``NONE``, so
-    the judgement above keeps some thinking behind it. The measurements
-    above say what this is worth: roughly 2 s per call, not a halving. It is
-    a small lever pulled because the target needs every one of them, and
-    Phase 15 owns whether the analysis quality paid for it.
+    **``MINIMAL`` is in this enum but ``gpt-5.6-luna`` does not accept it.**
+    Setting it as the default cost a real run, which died at the first model
+    call with ``HTTP 400: 'minimal' is not supported with the
+    'gpt-5.6-luna' model. Supported values are: 'none', 'low', 'medium',
+    'high', 'xhigh', and 'max'``. The enum spans what the *provider* offers
+    across models; what a given model accepts is narrower, and the only
+    place that shows up is a request. The value stays for models that take
+    it.
+
+    ``NONE`` is the default from 14.8, for the 60-second target (§2.14.1):
+    the nearest step below ``LOW`` this model actually has. The measurements
+    above say what it is worth — 20.7 s against 23.2 s, roughly 2 s a call,
+    not a halving — so it is a small lever pulled because the target needs
+    every one of them. The caution above stands and is now a live debt:
+    analysis is the pipeline's one act of judgement, and Phase 15 owns
+    whether taking the thinking away cost accuracy.
     """
 
     NONE = "none"
@@ -49,7 +59,7 @@ class OpenAIConfig(BaseModel):
     """Model, timeout, retry and token settings for :class:`OpenAIProvider`."""
 
     model: str = "gpt-5.6-luna"
-    reasoning_effort: ReasoningEffort | None = ReasoningEffort.MINIMAL
+    reasoning_effort: ReasoningEffort | None = ReasoningEffort.NONE
     """``None`` sends no reasoning parameter at all — the model's own default."""
 
     timeout_seconds: float = Field(default=60.0, gt=0.0)

@@ -48,7 +48,7 @@ from tripfinder.pipeline.base import PipelineContext
 _REMOVED_BODIES = frozenset({"[deleted]", "[removed]"})
 
 
-def _drop_reason(comment: Comment, config: PrefilterConfig) -> SuppressionReason | None:
+def drop_reason(comment: Comment, config: PrefilterConfig) -> SuppressionReason | None:
     """Why this comment is not substantive enough to analyse, or ``None`` if it is."""
     body = comment.body.strip()
     if not body or body.lower() in _REMOVED_BODIES:
@@ -104,7 +104,7 @@ class CheapPrefilterStep:
     ) -> list[Comment]:
         kept: list[Comment] = []
         for comment in comments:
-            reason = _drop_reason(comment, config)
+            reason = drop_reason(comment, config)
             if reason is None:
                 kept.append(comment)
             else:

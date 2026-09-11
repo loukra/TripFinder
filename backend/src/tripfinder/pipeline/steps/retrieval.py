@@ -64,7 +64,9 @@ class ContentRetrievalStep:
                 documents_unvisited = len(queue) - index
                 break
 
-            fetched = await self._fetch(context, document, recorder=recorder)
+            fetched = await fetch_comments(
+                context, document, recorder=recorder, step_name=self.name
+            )
             if fetched is None:
                 continue
             documents_retrieved += 1
@@ -115,33 +117,41 @@ class ContentRetrievalStep:
         context.research.status = ResearchStatus.ANALYZING
         return context
 
-    async def _fetch(
-        self,
-        context: PipelineContext,
-        document: SourceDocument,
-        *,
-        recorder: SourceHealthRecorder,
-    ) -> Sequence[Comment] | None:
-        """One comment-tree fetch. ``None`` means the call failed and was recorded."""
-        adapter = context.source.name
-        try:
-            comments = await context.source.fetch_comments(document)
-        except Exception as exc:  # one bad thread must not end the retrieval pass
-            kind = failure_kind(exc)
-            logger.warning(
-                "retrieval: %s failed to fetch comments for %s (%s): %s",
-                adapter,
-                document.id,
-                kind,
-                exc,
-            )
-            recorder.record_failure(adapter, kind=kind)
-            context.research.diagnostics.record_suppression(
-                step=self.name,
-                reason=SuppressionReason.RETRIEVAL_SOURCE_FAILURE,
-                count=1,
-                detail=kind,
-            )
-            return None
-        recorder.record_success(adapter)
-        return comments
+
+async def fetch_comments(
+    context: PipelineContext,
+    document: SourceDocument,
+    *,
+    recorder: SourceHealthRecorder,
+    step_name: str,
+) -> Sequence[Comment] | None:
+    """One comment-tree fetch. ``None`` means the call failed and was recorded.
+
+    Module-level rather than a method, because 14.8's strands fetch the same
+    way and must record a failure the same way (plan §2.14.2). A second
+    implementation would be a second set of §8.1 accounting rules, and the
+    one thing §0.1 cannot survive is evidence going missing quietly in only
+    one of them.
+    """
+    adapter = context.source.name
+    try:
+        comments = await context.source.fetch_comments(document)
+    except Exception as exc:  # one bad thread must not end the retrieval pass
+        kind = failure_kind(exc)
+        logger.warning(
+            "retrieval: %s failed to fetch comments for %s (%s): %s",
+            adapter,
+            document.id,
+            kind,
+            exc,
+        )
+        recorder.record_failure(adapter, kind=kind)
+        context.research.diagnostics.record_suppression(
+            step=step_name,
+            reason=SuppressionReason.RETRIEVAL_SOURCE_FAILURE,
+            count=1,
+            detail=kind,
+        )
+        return None
+    recorder.record_success(adapter)
+    return comments

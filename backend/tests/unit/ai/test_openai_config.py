@@ -16,7 +16,7 @@ def test_defaults_match_the_plan_2_10_model_choice() -> None:
     assert config.model == "gpt-5.6-luna"
     assert config.max_retries == 3
     assert config.base_url is None
-    assert config.reasoning_effort is ReasoningEffort.MINIMAL
+    assert config.reasoning_effort is ReasoningEffort.NONE
 
 
 def test_every_field_is_overridable() -> None:
