@@ -18,8 +18,9 @@ from tripfinder.domain.models import (
     ResearchStatus,
     SourceDocument,
 )
-from tripfinder.domain.ports import LLMProvider, SourceAdapter, SourceSearchQuery
+from tripfinder.domain.ports import LLMProvider, SourceAdapter, WebSearchProvider
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.search.fake import FakeSearchProvider
 
 NOW = datetime(2026, 9, 10, tzinfo=UTC)
 """A fixed "now" so document ages in these tests never drift."""
@@ -77,6 +78,7 @@ def make_comment(
 def make_context(
     *,
     source: SourceAdapter | None = None,
+    search: WebSearchProvider | None = None,
     llm: LLMProvider | None = None,
     config: ResearchConfig | None = None,
     status: ResearchStatus = ResearchStatus.RETRIEVING,
@@ -90,6 +92,7 @@ def make_context(
     context = PipelineContext(
         research=research,
         source=source or RecordingSourceAdapter(),
+        search=search or FakeSearchProvider(hits=[]),
         llm=llm or FakeLLMProvider(),
     )
     context.data["plan"] = make_plan()
@@ -105,20 +108,25 @@ class RecordingSourceAdapter:
         self,
         comments: Mapping[str, Sequence[Comment]] | None = None,
         *,
+        documents: Sequence[SourceDocument] = (),
         failing: Mapping[str, Exception] | None = None,
     ) -> None:
         self._comments = dict(comments or {})
+        self._documents = {document.id: document for document in documents}
         self._failing = dict(failing or {})
         self.fetched_document_ids: list[str] = []
+        self.hydrated_batches: list[list[str]] = []
 
     async def health_check(self) -> bool:
         return True
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        return []
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        raise LookupError(document_id)
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        self.hydrated_batches.append(list(document_ids))
+        return [
+            self._documents[document_id]
+            for document_id in document_ids
+            if document_id in self._documents
+        ]
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         self.fetched_document_ids.append(document.id)

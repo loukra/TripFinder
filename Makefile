@@ -6,8 +6,8 @@ db:
 db-stop:
 	docker compose stop postgres
 
-# `.env` is where OPENAI_API_KEY lives (see .env.example). Compose reads it
-# on its own; the native processes need it exported for them.
+# `.env` is where OPENAI_API_KEY and SERPER_API_KEY live (see .env.example).
+# Compose reads it on its own; the native processes need it exported for them.
 LOAD_ENV = set -a; [ -f .env ] && . ./.env; set +a;
 
 api:

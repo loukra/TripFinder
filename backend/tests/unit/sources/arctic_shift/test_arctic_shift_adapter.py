@@ -1,8 +1,12 @@
 """ArcticShiftAdapter tests against cassette fixtures (plan §8, Phase 4 acceptance).
 
-Covers: success, empty results, pagination, deleted authors, bot filtering,
+Covers: success, empty results, batching, deleted authors, bot filtering,
 malformed-item skipping, and retry-exhaustion propagation. All offline via
 ``httpx.MockTransport`` (plan §9 — tests never touch the network).
+
+There are no search tests here any more: plan §2.11 removed ``search`` from
+the port, because the endpoint behind it measured 1/5 successes against 6/6
+for the two endpoints exercised below.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import pytest
 from pydantic import HttpUrl
 
 from tripfinder.domain.models import SourceDocument
-from tripfinder.domain.ports import SourceAdapter, SourceSearchQuery
+from tripfinder.domain.ports import SourceAdapter
 from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 from tripfinder.sources.arctic_shift.client import ArcticShiftClient
 from tripfinder.sources.arctic_shift.config import ArcticShiftConfig
@@ -36,7 +40,7 @@ def _adapter(
 
 
 def _source_document(load_fixture: LoadFixture) -> SourceDocument:
-    raw = load_fixture("posts_search_success.json")["data"][0]
+    raw = load_fixture("posts_ids_batch.json")["data"][0]
     return SourceDocument(
         id=raw["id"],
         source="arctic_shift",
@@ -53,125 +57,74 @@ def test_satisfies_source_adapter_protocol(fast_config: FastConfig) -> None:
     assert isinstance(adapter, SourceAdapter)
 
 
-async def test_search_maps_fixture_posts_to_documents(
+async def test_fetch_documents_maps_fixture_posts_to_documents(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     adapter = _adapter(handler, fast_config)
 
-    documents = await adapter.search(SourceSearchQuery(query="underrated nature"))
+    documents = await adapter.fetch_documents(["1wbve58", "1wc001a"])
 
     assert [d.id for d in documents] == ["1wbve58", "1wc001a"]
     assert all(d.source == "arctic_shift" for d in documents)
 
 
-async def test_search_sends_subreddit_when_given(
+async def test_fetch_documents_sends_every_id_in_one_comma_separated_request(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
-    """The live search API rejects a bare `query` with no author/subreddit/
-    link_id/parent_id to scope it (plan §8) — this is the request-shape
-    half of that contract, cassette tests alone can't catch since the
-    handler never has to look at what it was sent."""
+    """The request-shape half of the contract, which a cassette alone cannot
+    catch: ``/api/posts/ids`` takes the whole batch in one ``ids`` param."""
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     adapter = _adapter(handler, fast_config)
 
-    await adapter.search(SourceSearchQuery(query="underrated nature", subreddit="travel"))
+    await adapter.fetch_documents(["1wbve58", "1wc001a"])
 
-    assert calls[0].url.params["subreddit"] == "travel"
-
-
-async def test_search_omits_subreddit_param_when_not_given(
-    load_fixture: LoadFixture, fast_config: FastConfig
-) -> None:
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
-
-    adapter = _adapter(handler, fast_config)
-
-    await adapter.search(SourceSearchQuery(query="underrated nature"))
-
-    assert "subreddit" not in calls[0].url.params
-
-
-async def test_search_returns_empty_sequence_for_empty_results(
-    load_fixture: LoadFixture, fast_config: FastConfig
-) -> None:
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json=load_fixture("posts_search_empty.json"))
-
-    adapter = _adapter(handler, fast_config)
-
-    documents = await adapter.search(SourceSearchQuery(query="nothing matches this"))
-
-    assert documents == []
     assert len(calls) == 1
+    assert calls[0].url.params["ids"] == "1wbve58,1wc001a"
 
 
-async def test_search_paginates_across_pages_until_limit_reached(
+async def test_fetch_documents_splits_requests_at_the_id_ceiling(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
+    """Plan §8: Arctic Shift takes at most 500 ids per call, so 501 is two
+    calls — and the ceiling is config, so the test can prove the split
+    without building a 501-element fixture."""
+    calls: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        if "before" in request.url.params:
-            return httpx.Response(200, json=load_fixture("posts_search_page2.json"))
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        calls.append(request)
+        return httpx.Response(200, json=load_fixture("posts_ids_empty.json"))
 
-    adapter = _adapter(handler, fast_config, page_size=2)
+    adapter = _adapter(handler, fast_config, max_ids_per_request=2)
 
-    documents = await adapter.search(SourceSearchQuery(query="underrated", limit=3))
+    await adapter.fetch_documents(["a", "b", "c", "d", "e"])
 
-    assert [d.id for d in documents] == ["1wbve58", "1wc001a", "1wc002b"]
+    assert [call.url.params["ids"] for call in calls] == ["a,b", "c,d", "e"]
 
 
-async def test_search_drops_malformed_item_and_keeps_valid_one(
-    load_fixture: LoadFixture, fast_config: FastConfig
+async def test_fetch_documents_makes_no_call_for_an_empty_request(
+    fast_config: FastConfig,
 ) -> None:
+    calls: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_search_malformed_item.json"))
+        calls.append(request)
+        return httpx.Response(200, json={"data": []})
 
     adapter = _adapter(handler, fast_config)
 
-    documents = await adapter.search(SourceSearchQuery(query="underrated", limit=1))
-
-    assert [d.id for d in documents] == ["1wbve58"]
-
-
-async def test_search_propagates_error_once_retries_are_exhausted(fast_config: FastConfig) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(429, json={"data": None, "error": "rate limited"})
-
-    adapter = _adapter(handler, fast_config, max_retries=1)
-
-    with pytest.raises(ArcticShiftUnavailableError):
-        await adapter.search(SourceSearchQuery(query="underrated"))
+    assert await adapter.fetch_documents([]) == []
+    assert calls == []
 
 
-async def test_fetch_document_returns_matching_document(
-    load_fixture: LoadFixture, fast_config: FastConfig
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_ids_success.json"))
-
-    adapter = _adapter(handler, fast_config)
-
-    document = await adapter.fetch_document("1wc001a")
-
-    assert document.title == "Hidden gem national parks"
-
-
-async def test_fetch_document_raises_lookup_error_when_not_found(
+async def test_fetch_documents_returns_empty_when_the_archive_knows_no_id(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -179,8 +132,32 @@ async def test_fetch_document_raises_lookup_error_when_not_found(
 
     adapter = _adapter(handler, fast_config)
 
-    with pytest.raises(LookupError):
-        await adapter.fetch_document("does-not-exist")
+    assert await adapter.fetch_documents(["does-not-exist"]) == []
+
+
+async def test_fetch_documents_drops_malformed_item_and_keeps_valid_one(
+    load_fixture: LoadFixture, fast_config: FastConfig
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=load_fixture("posts_ids_malformed_item.json"))
+
+    adapter = _adapter(handler, fast_config)
+
+    documents = await adapter.fetch_documents(["1wbve58", "1wc003c"])
+
+    assert [d.id for d in documents] == ["1wbve58"]
+
+
+async def test_fetch_documents_propagates_error_once_retries_are_exhausted(
+    fast_config: FastConfig,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"data": None, "error": "rate limited"})
+
+    adapter = _adapter(handler, fast_config, max_retries=1)
+
+    with pytest.raises(ArcticShiftUnavailableError):
+        await adapter.fetch_documents(["1wbve58"])
 
 
 async def test_fetch_comments_filters_bots_keeps_deleted_authors_and_paginates(
@@ -216,7 +193,7 @@ async def test_health_check_delegates_to_client(
     load_fixture: LoadFixture, fast_config: FastConfig
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     adapter = _adapter(handler, fast_config)
 

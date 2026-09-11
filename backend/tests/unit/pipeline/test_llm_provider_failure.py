@@ -36,6 +36,7 @@ from tripfinder.pipeline.fake_pipeline import (
 )
 from tripfinder.pipeline.runner import PipelineRunner
 from tripfinder.pipeline.steps.query_understanding import QueryUnderstandingStep
+from tripfinder.search.fake import FakeSearchProvider
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
 
 QUERY = "most underrated US states for nature"
@@ -50,7 +51,12 @@ def _context(provider: OpenAIProvider) -> PipelineContext:
     research = Research(
         original_query=QUERY, created_at=datetime.now(UTC), status=ResearchStatus.PENDING
     )
-    return PipelineContext(research=research, source=FakeSourceAdapter(), llm=provider)
+    return PipelineContext(
+        research=research,
+        source=FakeSourceAdapter(),
+        search=FakeSearchProvider(),
+        llm=provider,
+    )
 
 
 async def _run_with(provider: OpenAIProvider) -> Research:

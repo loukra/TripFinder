@@ -1,19 +1,24 @@
 """ArcticShiftAdapter — the MVP's only real ``SourceAdapter`` (plan §1, §8).
 
+**Retrieval only** since plan §2.11. This adapter no longer searches: its
+keyword endpoint measured 1/5 successes at 5.5–11 s while the two endpoints
+used here measured 6/6 at 0.2–1.0 s, so discovery moved to a
+``WebSearchProvider`` and Arctic Shift keeps the half it is good at.
+
 Endpoint choices:
 
-* ``search`` uses ``/api/posts/search`` — it returns thread-level results
-  directly as ``SourceDocument``s, matching the port's return type.
+* ``fetch_documents`` uses ``/api/posts/ids``, which takes up to 500 ids in
+  one request — the discovery step produces ids in bulk, so hydration is one
+  or two calls rather than one per thread.
 * ``fetch_comments`` uses ``/api/comments/search`` rather than
   ``/api/comments/tree``: both return the same comment records, but the
-  flat search endpoint shares its ``after``/``before`` date-cursor pagination
-  with ``posts/search`` and each record still carries ``link_id``/``parent_id``
-  for threading — the tree endpoint's nested ``kind``/``data``/``more``
-  structure isn't needed to satisfy this port.
+  flat endpoint paginates on an ``after`` date cursor and each record still
+  carries ``link_id``/``parent_id`` for threading — the tree endpoint's
+  nested ``kind``/``data``/``more`` structure isn't needed to satisfy this
+  port.
 
-Both list endpoints paginate on ``created_utc`` since Arctic Shift has no
-cursor token: each page's oldest/newest timestamp becomes the next page's
-``before``/``after``.
+``fetch_comments`` paginates on ``created_utc`` since Arctic Shift has no
+cursor token: each page's newest timestamp becomes the next page's ``after``.
 """
 
 from __future__ import annotations
@@ -23,7 +28,6 @@ from collections.abc import Sequence
 from typing import Any
 
 from tripfinder.domain.models import Comment, SourceDocument
-from tripfinder.domain.ports import SourceSearchQuery
 from tripfinder.sources.arctic_shift.client import ArcticShiftClient
 from tripfinder.sources.arctic_shift.config import ArcticShiftConfig
 from tripfinder.sources.arctic_shift.mapping import (
@@ -69,44 +73,26 @@ class ArcticShiftAdapter:
             logger.warning("arctic_shift: dropped malformed comment %r: %s", raw.get("id"), exc)
             return None
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        """Hydrate posts by id, in batches of at most ``max_ids_per_request``.
+
+        Ids the archive does not know are simply absent from the response.
+        That is not silently dropped evidence: the caller asked by id, knows
+        what it asked for, and can see the shortfall by comparing lengths —
+        which is exactly what the discovery step records (plan §0.1).
+        """
         documents: list[SourceDocument] = []
-        before: int | None = None
+        batch_size = self._config.max_ids_per_request
 
-        while len(documents) < query.limit:
-            page_limit = min(self._config.page_size, query.limit - len(documents))
-            params = {"query": query.query, "limit": str(page_limit), "sort": "desc"}
-            # The live API rejects a bare `query` with no author/subreddit
-            # scope (plan §8) — `SourceSearchQuery.subreddit` is how the
-            # caller supplies it (see analysis/discovery.py).
-            if query.subreddit:
-                params["subreddit"] = query.subreddit
-            if before is not None:
-                params["before"] = str(before)
-
-            body = await self._client.get("/api/posts/search", params=params)
-            raw_items = body.get("data") or []
-            if not raw_items:
-                break
-
-            for raw in raw_items:
+        for start in range(0, len(document_ids), batch_size):
+            batch = document_ids[start : start + batch_size]
+            body = await self._client.get("/api/posts/ids", params={"ids": ",".join(batch)})
+            for raw in body.get("data") or []:
                 document = self._map_post(raw)
                 if document is not None:
                     documents.append(document)
 
-            before = raw_items[-1]["created_utc"]
-            if len(raw_items) < page_limit:
-                break
-
-        return documents[: query.limit]
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        body = await self._client.get("/api/posts/ids", params={"ids": document_id})
-        for raw in body.get("data") or []:
-            document = self._map_post(raw)
-            if document is not None:
-                return document
-        raise LookupError(f"ArcticShiftAdapter has no document {document_id!r}")
+        return documents
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         comments: list[Comment] = []

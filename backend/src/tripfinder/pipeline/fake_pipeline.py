@@ -21,6 +21,7 @@ from tripfinder.pipeline.steps.fake import (
     FakeRetrievalStep,
     FakeUnderstandingStep,
 )
+from tripfinder.search.fake import FakeSearchProvider
 from tripfinder.sources.fake.adapter import FakeSourceAdapter
 from tripfinder.sources.fake.fixtures import fixture_comments, fixture_documents
 
@@ -55,7 +56,9 @@ def build_fake_pipeline_context_for(research: Research) -> PipelineContext:
     """
     source = FakeSourceAdapter(documents=fixture_documents(), comments=fixture_comments())
     llm = FakeLLMProvider({FakeAnalysisResponse: _DEFAULT_MENTIONS})
-    return PipelineContext(research=research, source=source, llm=llm)
+    return PipelineContext(
+        research=research, source=source, search=FakeSearchProvider(), llm=llm
+    )
 
 
 def build_fake_pipeline_runner(*, on_progress: ProgressListener | None = None) -> PipelineRunner:

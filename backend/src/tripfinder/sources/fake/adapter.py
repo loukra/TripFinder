@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from tripfinder.domain.models import Comment, SourceDocument
-from tripfinder.domain.ports import SourceSearchQuery
 
 
 class FakeSourceAdapter:
@@ -29,14 +28,15 @@ class FakeSourceAdapter:
     async def health_check(self) -> bool:
         return True
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        return self._documents[: query.limit]
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        """Only the ids this fixture knows, in the order they were asked for.
 
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        for document in self._documents:
-            if document.id == document_id:
-                return document
-        raise LookupError(f"FakeSourceAdapter has no document {document_id!r}")
+        An unknown id is omitted rather than raising — the real adapter
+        behaves the same way, because ``/api/posts/ids`` simply leaves an
+        unknown id out of its response.
+        """
+        by_id = {document.id: document for document in self._documents}
+        return [by_id[document_id] for document_id in document_ids if document_id in by_id]
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         return self._comments.get(document.id, [])

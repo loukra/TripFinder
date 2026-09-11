@@ -13,8 +13,9 @@ from collections import defaultdict
 from pydantic import BaseModel
 
 from tripfinder.domain.models import Comment, ResearchStatus, Result, SourceDocument
-from tripfinder.domain.ports import SourceSearchQuery
+from tripfinder.domain.ports import WebSearchQuery
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.search.reddit_urls import post_id_from_url
 
 
 class FakeUnderstandingStep:
@@ -35,7 +36,11 @@ class FakeDiscoveryStep:
 
     async def run(self, context: PipelineContext) -> PipelineContext:
         search_text = context.research.normalized_query or context.research.original_query
-        documents = await context.source.search(SourceSearchQuery(query=search_text))
+        hits = await context.search.search(WebSearchQuery(query=search_text))
+        post_ids = [
+            post_id for hit in hits if (post_id := post_id_from_url(hit.url)) is not None
+        ]
+        documents = await context.source.fetch_documents(list(dict.fromkeys(post_ids)))
         context.data["documents"] = list(documents)
         context.research.status = ResearchStatus.RETRIEVING
         return context

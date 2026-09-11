@@ -1,3 +1,11 @@
+"""Agentic Source Discovery over web search (plan §4.6 step 3, §2.11).
+
+Two things are being tested, and they fail differently: the *loop* must stay
+inside its budget however the LLM behaves, and the *hydration* must turn
+addresses into documents without ever letting an outage look like a quiet
+topic (plan §0.1).
+"""
+
 from __future__ import annotations
 
 from collections import deque
@@ -8,7 +16,7 @@ from pydantic import BaseModel, HttpUrl
 
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.analysis.discovery import DiscoveryTurnResponse
-from tripfinder.domain.config import ResearchBudget, ResearchConfig
+from tripfinder.domain.config import ResearchBudget, ResearchConfig, SourceHealthFloors
 from tripfinder.domain.models import (
     Comment,
     EntityType,
@@ -17,11 +25,20 @@ from tripfinder.domain.models import (
     ResearchPlan,
     ResearchStatus,
     SourceDocument,
+    SourceOutcome,
 )
-from tripfinder.domain.ports import LLMProvider, SourceAdapter, SourceSearchQuery
+from tripfinder.domain.ports import (
+    LLMProvider,
+    SourceAdapter,
+    WebSearchHit,
+    WebSearchProvider,
+    WebSearchQuery,
+)
 from tripfinder.pipeline.base import PipelineContext
-from tripfinder.pipeline.health import get_recorder
+from tripfinder.pipeline.health import assess_source_health, get_recorder, terminal_status
 from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
+
+THREAD_URL = "https://www.reddit.com/r/travel/comments/{post_id}/a_thread_title/"
 
 
 def _plan() -> ResearchPlan:
@@ -42,17 +59,22 @@ def _document(document_id: str) -> SourceDocument:
         id=document_id,
         source="fake",
         title=f"Document {document_id}",
-        url=HttpUrl(f"https://reddit.com/r/travel/{document_id}"),
+        url=HttpUrl(THREAD_URL.format(post_id=document_id)),
         created_at=datetime(2025, 6, 1, tzinfo=UTC),
         comment_count=5,
     )
+
+
+def _hit(post_id: str) -> WebSearchHit:
+    return WebSearchHit(url=THREAD_URL.format(post_id=post_id), title=f"Thread {post_id}")
 
 
 def _context(
     plan: ResearchPlan,
     *,
     llm: LLMProvider,
-    source: SourceAdapter,
+    search: WebSearchProvider,
+    source: SourceAdapter | None = None,
     budget: ResearchBudget | None = None,
 ) -> PipelineContext:
     research = Research(
@@ -61,42 +83,77 @@ def _context(
         status=ResearchStatus.DISCOVERING,
         research_config=ResearchConfig(budget=budget or ResearchBudget()),
     )
-    context = PipelineContext(research=research, source=source, llm=llm)
+    context = PipelineContext(
+        research=research,
+        source=source or _HydratingAdapter(),
+        search=search,
+        llm=llm,
+    )
     context.data["plan"] = plan
     return context
 
 
-class _CountingAdapter:
-    """Returns one fresh document per call and records the query it received."""
+class _CountingSearch:
+    """Returns one fresh thread address per call and records the query it got."""
 
     name = "counting"
 
     def __init__(self) -> None:
         self.queries: list[str] = []
-        self.search_queries: list[SourceSearchQuery] = []
+
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        self.queries.append(query.query)
+        return [_hit(f"doc{len(self.queries)}")]
+
+
+class _SearchWithSecret(_CountingSearch):
+    """A provider carrying data outside the protocol, to prove it never leaks."""
+
+    api_key = "super-secret-value"
+
+
+class _HydratingAdapter:
+    """Returns a document for every id it is asked about, and records the batches."""
+
+    name = "hydrating"
+
+    def __init__(self, *, known_ids: Sequence[str] | None = None) -> None:
+        self._known_ids = None if known_ids is None else set(known_ids)
+        self.batches: list[list[str]] = []
 
     async def health_check(self) -> bool:
         return True
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        self.queries.append(query.query)
-        self.search_queries.append(query)
-        return [_document(f"doc-{len(self.queries)}")]
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        raise NotImplementedError
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        self.batches.append(list(document_ids))
+        return [
+            _document(document_id)
+            for document_id in document_ids
+            if self._known_ids is None or document_id in self._known_ids
+        ]
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         raise NotImplementedError
 
 
-class _AdapterWithSecret(_CountingAdapter):
-    """A `SourceAdapter` carrying data outside the protocol, to prove it never leaks."""
+class _FailingAdapter:
+    """Hydration is unreachable — the §8.1 outage that must not look like thin evidence."""
 
-    api_key = "super-secret-value"
+    name = "unreachable"
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        error = RuntimeError("gateway")
+        error.kind = "http_5xx"  # type: ignore[attr-defined]
+        raise error
+
+    async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
+        raise NotImplementedError
 
 
-class _SelectiveFailureAdapter:
+class _SelectiveFailureSearch:
     """Fails for one specific query text, succeeds for everything else."""
 
     name = "selective_failure"
@@ -105,20 +162,40 @@ class _SelectiveFailureAdapter:
         self._failing_query = failing_query
         self.queries: list[str] = []
 
-    async def health_check(self) -> bool:
-        return True
-
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
         self.queries.append(query.query)
-        if query.query == self._failing_query:
-            raise TimeoutError("arctic shift did not respond")
-        return [_document("good-doc")]
+        if self._failing_query in query.query:
+            raise TimeoutError("the search provider did not respond")
+        return [_hit("gooddoc")]
 
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        raise NotImplementedError
 
-    async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
-        raise NotImplementedError
+class _FlakySearch:
+    """Fails the first query, then succeeds — a partial outage during discovery."""
+
+    name = "flaky"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        self.calls += 1
+        if self.calls == 1:
+            error = RuntimeError("gateway")
+            error.kind = "http_5xx"  # type: ignore[attr-defined]
+            raise error
+        return [_hit(f"doc{self.calls}")]
+
+
+class _FixedHitsSearch:
+    """Returns the same canned hit list for every query."""
+
+    name = "fixed"
+
+    def __init__(self, hits: Sequence[WebSearchHit]) -> None:
+        self._hits = list(hits)
+
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        return self._hits
 
 
 class _SpyLLM:
@@ -137,341 +214,315 @@ class _SpyLLM:
         return response
 
 
-async def test_stops_at_max_search_queries_even_if_the_llm_always_continues() -> None:
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True, next_query=query, subreddit="travel", reasoning="fresh angle"
+def _turns(*queries: str) -> list[DiscoveryTurnResponse]:
+    return [
+        DiscoveryTurnResponse(should_continue=True, next_query=query, reasoning="fresh angle")
+        for query in queries
+    ]
+
+
+def _stop() -> DiscoveryTurnResponse:
+    return DiscoveryTurnResponse(should_continue=False, reasoning="that's enough coverage")
+
+
+class TestTheLoopStaysInsideItsBudget:
+    async def test_stops_at_max_search_queries_even_if_the_llm_always_continues(self) -> None:
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: _turns(
+                    "underrated states nature",
+                    "national parks hidden gems",
+                    "best road trip destinations",
+                )
+            }
         )
-        for query in [
+        context = _context(
+            _plan(), llm=llm, search=search, budget=ResearchBudget(max_search_queries=3)
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert search.queries == [
+            "underrated states nature site:reddit.com",
+            "national parks hidden gems site:reddit.com",
+            "best road trip destinations site:reddit.com",
+        ]
+        assert result.data["discovery_queries_issued"] == [
             "underrated states nature",
             "national parks hidden gems",
             "best road trip destinations",
         ]
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=3)
-    )
+        assert len(result.data["documents"]) == 3
+        assert result.research.status == ResearchStatus.RETRIEVING
 
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == [
-        "underrated states nature",
-        "national parks hidden gems",
-        "best road trip destinations",
-    ]
-    assert result.data["discovery_queries_issued"] == adapter.queries
-    assert len(result.data["documents"]) == 3
-    assert result.research.status == ResearchStatus.RETRIEVING
-
-
-async def test_llm_can_stop_before_the_budget_is_exhausted() -> None:
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="travel",
-            reasoning="seed",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="that's enough coverage"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=10)
-    )
-
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["underrated states nature"]
-    assert len(result.data["documents"]) == 1
-
-
-async def test_near_duplicate_query_is_never_sent_to_the_source() -> None:
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated us national parks",
-            subreddit="travel",
-            reasoning="seed",
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="US underrated national parks",
-            subreddit="travel",
-            reasoning="same idea, reworded",
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="best hiking trails usa",
-            subreddit="travel",
-            reasoning="new angle",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="enough coverage"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=5)
-    )
-
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["underrated us national parks", "best hiking trails usa"]
-    assert result.data["discovery_queries_issued"] == adapter.queries
-
-
-async def test_search_is_scoped_to_the_subreddit_the_llm_named() -> None:
-    """Arctic Shift's live search API requires this scope (plan §8) — a
-    regression test for the query/subreddit split, not just the fake
-    adapter's in-memory contract."""
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="travel",
-            reasoning="seed",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=5)
-    )
-
-    await AgenticDiscoveryStep().run(context)
-
-    assert adapter.search_queries[0].subreddit == "travel"
-
-
-async def test_a_turn_naming_no_subreddit_is_never_sent_to_the_source() -> None:
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True, next_query="underrated states nature", reasoning="forgot scope"
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="a properly scoped query",
-            subreddit="travel",
-            reasoning="retry with scope",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=5)
-    )
-
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["a properly scoped query"]
-    assert result.data["discovery_queries_issued"] == ["a properly scoped query"]
-
-
-async def test_a_subreddit_outside_the_plans_candidates_is_never_sent_to_the_source() -> None:
-    """A hallucinated subreddit is discarded, not trusted (plan §29 — never
-    silently invent evidence, applied here to the request itself)."""
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="somewhere_not_offered",
-            reasoning="hallucinated subreddit",
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="a properly scoped query",
-            subreddit="travel",
-            reasoning="retry with an offered subreddit",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=5)
-    )
-
-    await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["a properly scoped query"]
-
-
-async def test_the_same_query_text_in_two_different_subreddits_is_not_a_duplicate() -> None:
-    adapter = _CountingAdapter()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="travel",
-            reasoning="seed in r/travel",
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="hiking",
-            reasoning="same wording, a different community",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        ResearchPlan(
-            normalized_query="underrated us states for nature",
-            scope=GeoScope(type="country", value="United States"),
-            entity_granularity=EntityType.STATE,
-            granularity_confidence=0.9,
-            topic="nature",
-            criteria=["underrated"],
-            seed_queries=["underrated states nature"],
-            candidate_subreddits=["travel", "hiking"],
-        ),
-        llm=llm,
-        source=adapter,
-        budget=ResearchBudget(max_search_queries=5),
-    )
-
-    await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["underrated states nature", "underrated states nature"]
-    assert [q.subreddit for q in adapter.search_queries] == ["travel", "hiking"]
-
-
-async def test_loop_terminates_early_when_the_llm_keeps_repeating_the_same_query() -> None:
-    adapter = _CountingAdapter()
-    same_query = "underrated us national parks"
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True, next_query=same_query, subreddit="travel", reasoning="seed"
+    async def test_llm_can_stop_before_the_budget_is_exhausted(self) -> None:
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: [*_turns("underrated states nature"), _stop()]}
         )
-    ] + [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query=same_query,
-            subreddit="travel",
-            reasoning="still that one",
+        context = _context(
+            _plan(), llm=llm, search=search, budget=ResearchBudget(max_search_queries=10)
         )
-        for _ in range(50)
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert len(search.queries) == 1
+        assert len(result.data["documents"]) == 1
+
+    async def test_near_duplicate_query_is_never_sent_to_the_provider(self) -> None:
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    *_turns(
+                        "underrated us national parks",
+                        "US underrated national parks",
+                        "best hiking trails usa",
+                    ),
+                    _stop(),
+                ]
+            }
+        )
+        context = _context(
+            _plan(), llm=llm, search=search, budget=ResearchBudget(max_search_queries=5)
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == [
+            "underrated us national parks",
+            "best hiking trails usa",
+        ]
+
+    async def test_loop_terminates_early_when_the_llm_keeps_repeating_itself(self) -> None:
+        search = _CountingSearch()
+        same_query = "underrated us national parks"
+        llm = FakeLLMProvider({DiscoveryTurnResponse: _turns(*([same_query] * 51))})
+        context = _context(
+            _plan(), llm=llm, search=search, budget=ResearchBudget(max_search_queries=20)
+        )
+
+        # If the loop failed to bound repeated duplicates, this would drain
+        # the 51-response queue and raise instead of returning.
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == [same_query]
+
+    async def test_the_loop_stops_once_max_total_posts_is_reached(self) -> None:
+        search = _FixedHitsSearch([_hit("doc1"), _hit("doc2"), _hit("doc3")])
+        llm = FakeLLMProvider({DiscoveryTurnResponse: _turns("first angle", "second angle")})
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            budget=ResearchBudget(max_search_queries=10, max_total_posts=2),
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_post_ids_found"] == ["doc1", "doc2"]
+        assert result.data["discovery_queries_issued"] == ["first angle"]
+
+
+class TestAddressesBecomeDocuments:
+    async def test_the_query_is_restricted_to_reddit_by_the_tool_not_the_model(self) -> None:
+        """A restriction the model can forget is not a restriction (plan §2.11)."""
+        search = _CountingSearch()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("underrated states"), _stop()]})
+
+        await AgenticDiscoveryStep().run(_context(_plan(), llm=llm, search=search))
+
+        assert search.queries == ["underrated states site:reddit.com"]
+
+    async def test_a_url_that_names_no_post_costs_no_hydrate_call(self) -> None:
+        search = _FixedHitsSearch(
+            [
+                _hit("doc1"),
+                WebSearchHit(url="https://www.reddit.com/r/travel/", title="r/travel"),
+                WebSearchHit(url="https://example.com/blog/best-states", title="A blog"),
+            ]
+        )
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("underrated states"), _stop()]})
+
+        result = await AgenticDiscoveryStep().run(
+            _context(_plan(), llm=llm, search=search, source=adapter)
+        )
+
+        assert adapter.batches == [["doc1"]]
+        assert [document.id for document in result.data["documents"]] == ["doc1"]
+
+    async def test_the_same_thread_found_twice_is_hydrated_once(self) -> None:
+        search = _FixedHitsSearch([_hit("doc1"), _hit("doc1")])
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("a", "b different words"), _stop()]})
+
+        await AgenticDiscoveryStep().run(
+            _context(_plan(), llm=llm, search=search, source=adapter)
+        )
+
+        assert adapter.batches == [["doc1"]]
+
+    async def test_every_collected_id_is_hydrated_in_one_call(self) -> None:
+        search = _CountingSearch()
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: _turns("first angle", "second angle", "third angle")}
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            source=adapter,
+            budget=ResearchBudget(max_search_queries=3),
+        )
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert adapter.batches == [["doc1", "doc2", "doc3"]]
+
+    async def test_nothing_found_means_no_hydrate_call_at_all(self) -> None:
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [_stop()]})
+
+        result = await AgenticDiscoveryStep().run(
+            _context(_plan(), llm=llm, search=_CountingSearch(), source=adapter)
+        )
+
+        assert adapter.batches == []
+        assert result.data["documents"] == []
+        assert result.data["discovery_documents_unhydrated"] == 0
+
+    async def test_an_id_the_archive_does_not_know_is_recorded_as_unhydrated(self) -> None:
+        """Plan §0.1: evidence we located and failed to retrieve is counted,
+        not left to be inferred from a shorter list than expected."""
+        search = _FixedHitsSearch([_hit("doc1"), _hit("gonedoc")])
+        adapter = _HydratingAdapter(known_ids=["doc1"])
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("underrated states"), _stop()]})
+
+        result = await AgenticDiscoveryStep().run(
+            _context(_plan(), llm=llm, search=search, source=adapter)
+        )
+
+        assert result.data["discovery_post_ids_found"] == ["doc1", "gonedoc"]
+        assert [document.id for document in result.data["documents"]] == ["doc1"]
+        assert result.data["discovery_documents_unhydrated"] == 1
+
+
+class TestNeitherDependencyFailureIsSwallowed:
+    async def test_a_failed_search_call_does_not_crash_discovery(self) -> None:
+        search = _SelectiveFailureSearch(failing_query="bad query")
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    *_turns("bad query", "good query different words"),
+                    _stop(),
+                ]
+            }
+        )
+        context = _context(
+            _plan(), llm=llm, search=search, budget=ResearchBudget(max_search_queries=5)
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == [
+            "bad query",
+            "good query different words",
+        ]
+        assert [document.id for document in result.data["documents"]] == ["gooddoc"]
+        assert result.research.status == ResearchStatus.RETRIEVING
+
+    async def test_a_failed_search_is_counted_against_the_search_provider(self) -> None:
+        """§8.1, extended to two dependencies: the snapshot has to say which
+        one failed, so a dead search engine is never read as a quiet topic."""
+        search = _FlakySearch()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: [*_turns("underrated states", "quiet national parks"), _stop()]}
+        )
+        context = _context(_plan(), llm=llm, search=search)
+
+        await AgenticDiscoveryStep().run(context)
+
+        health = {entry.adapter: entry for entry in get_recorder(context).snapshot()}
+        assert (health["flaky"].calls_attempted, health["flaky"].calls_succeeded) == (2, 1)
+        assert health["flaky"].failure_kinds == {"http_5xx": 1}
+
+    async def test_a_failed_hydration_is_counted_against_the_source_adapter(self) -> None:
+        search = _CountingSearch()
+        adapter = _FailingAdapter()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("underrated states"), _stop()]})
+        context = _context(_plan(), llm=llm, search=search, source=adapter)
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        health = {entry.adapter: entry for entry in get_recorder(context).snapshot()}
+        assert health["unreachable"].failure_kinds == {"http_5xx": 1}
+        assert health["counting"].calls_succeeded == 1
+        assert result.data["documents"] == []
+        # The ids were found; retrieving them is what failed. Recording both
+        # is what lets §8.1 tell the two apart (plan §0.1).
+        assert result.data["discovery_post_ids_found"] == ["doc1"]
+        assert result.data["discovery_documents_unhydrated"] == 1
+
+    async def test_a_dead_search_provider_is_an_outage_not_a_quiet_topic(self) -> None:
+        """Plan §10 Phase 14.5 acceptance, and the §0.1 obligation behind it:
+        every search failing means no evidence, and §8.1 rule 1 has to reach
+        ``source_unavailable`` rather than let the run report nothing found."""
+        search = _SelectiveFailureSearch(failing_query="")  # every query fails
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: _turns("first angle", "second angle different words")}
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            source=adapter,
+            budget=ResearchBudget(max_search_queries=2),
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["documents"] == []
+        assert adapter.batches == []  # nothing to hydrate, so nothing was spent trying
+
+        assessment = assess_source_health(
+            get_recorder(context).snapshot(),
+            posts_retrieved=0,
+            comments_analyzed=0,
+            floors=SourceHealthFloors(),
+        )
+
+        assert assessment.outcome is SourceOutcome.UNAVAILABLE
+        assert terminal_status(assessment.outcome, budget_limited=False) is (
+            ResearchStatus.SOURCE_UNAVAILABLE
+        )
+        assert "selective_failure" in assessment.reasons[0]
+
+    async def test_both_dependencies_appear_separately_in_the_health_snapshot(self) -> None:
+        search = _CountingSearch()
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider({DiscoveryTurnResponse: [*_turns("underrated states"), _stop()]})
+        context = _context(_plan(), llm=llm, search=search, source=adapter)
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert [entry.adapter for entry in get_recorder(context).snapshot()] == [
+            "counting",
+            "hydrating",
+        ]
+
+
+async def test_discovery_prompt_never_contains_provider_internals() -> None:
+    search = _SearchWithSecret()
+    spy = _SpyLLM([*_turns("underrated states nature"), _stop()])
     context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=20)
-    )
-
-    # If the loop failed to bound repeated duplicates, this would eventually
-    # drain the 51-response queue and raise LookupError instead of returning.
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == [same_query]
-    assert result.data["discovery_queries_issued"] == [same_query]
-
-
-async def test_a_failed_search_call_does_not_crash_discovery() -> None:
-    adapter = _SelectiveFailureAdapter(failing_query="bad query")
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True, next_query="bad query", subreddit="travel", reasoning="try this"
-        ),
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="good query different words",
-            subreddit="travel",
-            reasoning="retry",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    llm = FakeLLMProvider({DiscoveryTurnResponse: turns})
-    context = _context(
-        _plan(), llm=llm, source=adapter, budget=ResearchBudget(max_search_queries=5)
-    )
-
-    result = await AgenticDiscoveryStep().run(context)
-
-    assert adapter.queries == ["bad query", "good query different words"]
-    assert [document.id for document in result.data["documents"]] == ["good-doc"]
-    assert result.research.status == ResearchStatus.RETRIEVING
-
-
-async def test_discovery_prompt_never_contains_adapter_internals() -> None:
-    adapter = _AdapterWithSecret()
-    turns = [
-        DiscoveryTurnResponse(
-            should_continue=True,
-            next_query="underrated states nature",
-            subreddit="travel",
-            reasoning="seed",
-        ),
-        DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-    ]
-    spy = _SpyLLM(turns)
-    context = _context(
-        _plan(), llm=spy, source=adapter, budget=ResearchBudget(max_search_queries=5)
+        _plan(), llm=spy, search=search, budget=ResearchBudget(max_search_queries=5)
     )
 
     await AgenticDiscoveryStep().run(context)
 
     assert spy.prompts  # sanity: the loop actually ran and prompted the LLM
-    assert all(adapter.api_key not in prompt for prompt in spy.prompts)
-
-
-class _FailingSearchAdapter:
-    """Fails the first search, then succeeds — a partial outage during discovery."""
-
-    name = "flaky"
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def health_check(self) -> bool:
-        return True
-
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        self.calls += 1
-        if self.calls == 1:
-            error = RuntimeError("gateway")
-            error.kind = "http_5xx"  # type: ignore[attr-defined]
-            raise error
-        return [_document(f"d{self.calls}")]
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        raise LookupError(document_id)
-
-    async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
-        return []
-
-
-async def test_discovery_searches_are_counted_toward_source_health() -> None:
-    """A search that fails is a source failure, not an empty result (plan §8.1)."""
-    adapter = _FailingSearchAdapter()
-    llm = FakeLLMProvider(
-        {
-            DiscoveryTurnResponse: deque(
-                [
-                    DiscoveryTurnResponse(
-                        should_continue=True,
-                        next_query="underrated states",
-                        subreddit="travel",
-                        reasoning="start",
-                    ),
-                    DiscoveryTurnResponse(
-                        should_continue=True,
-                        next_query="quiet national parks",
-                        subreddit="travel",
-                        reasoning="more",
-                    ),
-                    DiscoveryTurnResponse(should_continue=False, reasoning="done"),
-                ]
-            )
-        }
-    )
-    context = _context(_plan(), llm=llm, source=adapter)
-
-    await AgenticDiscoveryStep().run(context)
-
-    (health,) = get_recorder(context).snapshot()
-    assert health.adapter == "flaky"
-    assert (health.calls_attempted, health.calls_succeeded) == (2, 1)
-    assert health.failure_kinds == {"http_5xx": 1}
+    assert all(search.api_key not in prompt for prompt in spy.prompts)

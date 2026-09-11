@@ -1,11 +1,11 @@
-"""Agentic Source Discovery's AI contract (plan §4.6 step 3).
+"""Agentic Source Discovery's AI contract (plan §4.6 step 3, amended by §2.11).
 
 Each turn the LLM sees the research plan, the queries already searched, and
-how many documents have been found, then either proposes the next search
-query or declares discovery complete. Bounding the number of turns,
-rejecting near-duplicate queries, and executing the search through the tool
-boundary are all deterministic and live in ``pipeline.steps.discovery`` —
-the same split §4.7 uses for Document Triage.
+how many threads have been found, then either proposes the next search query
+or declares discovery complete. Bounding the number of turns, rejecting
+near-duplicate queries, restricting the search to Reddit and hydrating the
+results are all deterministic and live in ``pipeline.steps.discovery`` and
+``search.tools`` — the same split §4.7 uses for Document Triage.
 """
 
 from __future__ import annotations
@@ -18,18 +18,14 @@ from tripfinder.domain.models import ResearchPlan
 class DiscoveryTurnResponse(BaseModel):
     """One agent turn: propose the next query, or stop.
 
-    ``subreddit`` names which of the plan's ``candidate_subreddits`` this
-    query is scoped to. Arctic Shift's live search API rejects a full-text
-    query with no ``subreddit``/``author``/``link_id``/``parent_id`` to scope
-    it (plan §8) - this is how that scope reaches the source, rather than
-    the model trying to encode it into ``next_query`` itself (e.g. a
-    Google-style ``site:reddit.com/r/...`` filter, which Arctic Shift does
-    not parse).
+    There is no ``subreddit`` field any more (plan §2.11). Discovery runs
+    against a web search engine, which needs no scope to answer, and the
+    ``site:`` restriction is applied by the tool rather than written by the
+    model — a restriction the model can forget is not a restriction.
     """
 
     should_continue: bool
     next_query: str | None = None
-    subreddit: str | None = None
     reasoning: str = Field(min_length=1)
 
 
@@ -46,20 +42,20 @@ def build_discovery_prompt(
         f"Criteria: {', '.join(plan.criteria) or '(none)'}\n"
         f"Scope: {plan.scope.type} = {plan.scope.value}\n"
         f"Target entity granularity: {plan.entity_granularity.value}\n"
-        f"Candidate subreddits: {', '.join(plan.candidate_subreddits) or '(none)'}\n"
+        f"Relevant subreddits: {', '.join(plan.candidate_subreddits) or '(none)'}\n"
         f"Suggested seed queries: {', '.join(plan.seed_queries) or '(none)'}\n\n"
         f"Queries already searched ({len(issued_queries)}):\n{issued}\n\n"
-        f"Documents found so far: {documents_found}\n\n"
+        f"Reddit threads found so far: {documents_found}\n\n"
         "Propose ONE new search query that is meaningfully different from "
         "every query already searched, or set should_continue=false. Never "
         "propose a query that is substantially the same as one already "
         "searched.\n\n"
-        "The search is a literal full-text match over real comment and post "
-        "bodies, not a web search engine: never use site:, boolean OR/AND, "
-        "or any other search-engine syntax in next_query - write it as "
-        "plain keywords a person would use in a sentence. Every query must "
-        "also be scoped: set subreddit to exactly one name from Candidate "
-        "subreddits above (without 'r/'). If none of the candidates fit "
-        "this query, set should_continue=false instead of guessing a "
-        "subreddit."
+        "The query goes to a web search engine, which is already restricted "
+        "to Reddit for you - do not write site:, inurl:, quotes, or boolean "
+        "operators, and do not name a subreddit unless a person would "
+        "naturally type it. Write what someone would type into Google to "
+        "find a Reddit thread where people discuss this: a natural phrase, "
+        "not keywords. Vary the angle between turns - phrase one query as "
+        "the question people would ask, another around a specific criterion, "
+        "another around the words enthusiasts would use."
     )

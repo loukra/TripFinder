@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from builders.phase7 import make_context, make_document
+from builders.phase7 import make_context
 from tripfinder.domain.models import (
     Comment,
     ResearchStatus,
     SourceDocument,
     SourceOutcome,
 )
-from tripfinder.domain.ports import SourceSearchQuery
 from tripfinder.pipeline.steps.preflight import UNREACHABLE, SourcePreflightStep
 
 
@@ -30,13 +29,9 @@ class ProbeAdapter:
             raise self._healthy
         return self._healthy
 
-    async def search(self, query: SourceSearchQuery) -> Sequence[SourceDocument]:
-        self.calls.append("search")
-        return [make_document("d1")]
-
-    async def fetch_document(self, document_id: str) -> SourceDocument:
-        self.calls.append("fetch_document")
-        raise LookupError(document_id)
+    async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]:
+        self.calls.append("fetch_documents")
+        return []
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]:
         self.calls.append("fetch_comments")
