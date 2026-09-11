@@ -11,6 +11,18 @@ The step also enforces ``maxAIAnalysisItems`` — the last bound before the
 expensive step — and keeps the counted corpus separate from the evidence
 corpus.
 
+**How the budget is spent is a measurement decision, not a detail** (plan
+§2.12). It used to be "the first N comments in document order", and in the
+measured run that meant three of eighty-one surviving threads supplied every
+counted opinion. Threads four to eighty-one contributed nothing. Raising the
+budget would not have fixed it — it would have bought the first fifteen
+threads instead of the first three — because each thread is a different
+*population*: r/AskAnAmerican, r/hiking and r/mountainbiking are not the same
+people answering. Sampling three threads samples three communities, and it
+silently capped ``discussion_count``, which §4.2 uses to signal corroboration
+across independent discussions. The measured top result's "3 threads" was the
+ceiling, not a finding.
+
 **The §4.5 binding rule lives here.** ``counted_comments`` holds polling
 comments only. Both the respondent pool `P` and every entity's supporter
 set are drawn from that one list, so a topical thread's users can never
@@ -21,6 +33,7 @@ touch the number.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 
 from tripfinder.domain.config import PrefilterConfig
@@ -60,15 +73,18 @@ class CheapPrefilterStep:
 
         # Counted comments hold their budget first — evidence cannot buy
         # analysis capacity away from the corpus that decides the ranking.
-        counted, dropped = _truncate(counted, max_items)
-        evidence, dropped_evidence = _truncate(evidence, max_items - len(counted))
+        counted, dropped = _allocate(counted, max_items)
+        evidence, dropped_evidence = _allocate(evidence, max_items - len(counted))
         over_budget = dropped + dropped_evidence
         if over_budget:
             diagnostics.record_suppression(
                 step=self.name,
                 reason=SuppressionReason.BUDGET_MAX_AI_ANALYSIS_ITEMS,
                 count=over_budget,
-                detail=f"analysis corpus capped at {max_items} items",
+                detail=(
+                    f"analysis corpus capped at {max_items} items, "
+                    "spread across every document"
+                ),
             )
             diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
 
@@ -98,9 +114,43 @@ class CheapPrefilterStep:
         return kept
 
 
-def _truncate(comments: list[Comment], limit: int) -> tuple[list[Comment], int]:
+def _allocate(comments: list[Comment], limit: int) -> tuple[list[Comment], int]:
+    """Spend ``limit`` across every document, best comments first.
+
+    One round at a time: each document gives up its highest-scoring
+    unspent comment, then the next, until the budget runs out. A document
+    with 566 comments and a document with 4 therefore reach analysis
+    together, and no thread can take the whole budget while others get none
+    (plan §2.12).
+
+    **The returned order is load-bearing, not incidental.** Round-robin means
+    any prefix of this list is already a broad sample, so a run that stops
+    early — §2.12.2's admission deadline, or a lost batch — still has
+    something to say about most threads rather than everything about three.
+
+    Ties, and comments whose source reported no score, keep the order
+    retrieval left them in: unknown is not zero, but it has to sort
+    somewhere, and "as retrieved" invents no ranking of its own.
+    """
     if limit <= 0:
         return [], len(comments)
     if len(comments) <= limit:
         return comments, 0
-    return comments[:limit], len(comments) - limit
+
+    by_document: dict[str, list[Comment]] = defaultdict(list)
+    for comment in comments:
+        by_document[comment.source_document_id].append(comment)
+    queues = [
+        sorted(document, key=lambda comment: -(comment.score or 0))
+        for document in by_document.values()
+    ]
+
+    kept: list[Comment] = []
+    for position in range(max(len(queue) for queue in queues)):
+        for queue in queues:
+            if position >= len(queue):
+                continue
+            kept.append(queue[position])
+            if len(kept) == limit:
+                return kept, len(comments) - limit
+    return kept, len(comments) - len(kept)

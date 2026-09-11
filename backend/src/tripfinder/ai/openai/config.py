@@ -11,13 +11,40 @@ might serialise into a research snapshot or a log line.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
+
+
+class ReasoningEffort(StrEnum):
+    """How much the model is asked to think before answering (plan §2.10, §2.12).
+
+    Measured on one real 20-comment analysis batch, 20/20 comments analysed
+    at every level: default 32.7 s, ``LOW`` 23.2 s, ``NONE`` 20.7 s. A
+    smaller lever than it looks, but comment analysis was 93 % of a run's
+    wall clock, so a third off each of 50 calls is not nothing.
+
+    ``NONE`` is deliberately not the default. The step it governs is the one
+    judgement in the pipeline that has to weigh what a comment *means*
+    against a question it never saw (plan §5), and buying 2.5 s per batch by
+    taking away the thinking is the kind of trade Phase 15 should make on
+    evidence, not one to assume up front.
+    """
+
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class OpenAIConfig(BaseModel):
     """Model, timeout, retry and token settings for :class:`OpenAIProvider`."""
 
     model: str = "gpt-5.6-luna"
+    reasoning_effort: ReasoningEffort | None = ReasoningEffort.LOW
+    """``None`` sends no reasoning parameter at all — the model's own default."""
+
     timeout_seconds: float = Field(default=60.0, gt=0.0)
     max_retries: int = Field(default=3, ge=0)
     max_output_tokens: int = Field(default=8192, gt=0)

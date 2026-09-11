@@ -188,6 +188,105 @@ class TestAnalysisBudget:
         assert [comment.id for comment in context.data["evidence_comments"]] == ["t0", "t1"]
 
 
+class TestTheBudgetIsSpreadAcrossDocuments:
+    """Plan §2.12: three of eighty-one threads supplied every counted opinion."""
+
+    def _across(self, documents: int, per_document: int) -> list[Comment]:
+        return [
+            make_comment(
+                f"d{document}-c{index}",
+                document_id=f"d{document}",
+                body=LONG_ENOUGH,
+                score=per_document - index,
+            )
+            for document in range(documents)
+            for index in range(per_document)
+        ]
+
+    async def test_no_single_document_can_take_the_whole_budget(self) -> None:
+        """The acceptance criterion, stated as the defect it replaces."""
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=6))
+        context = _loaded(make_context(config=config), polling=self._across(3, 20))
+
+        await CheapPrefilterStep().run(context)
+
+        documents = {
+            comment.source_document_id for comment in context.data["counted_comments"]
+        }
+        assert documents == {"d0", "d1", "d2"}
+
+    async def test_every_document_contributes_when_the_budget_allows_one_each(self) -> None:
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=5))
+        context = _loaded(make_context(config=config), polling=self._across(5, 10))
+
+        await CheapPrefilterStep().run(context)
+
+        documents = [
+            comment.source_document_id for comment in context.data["counted_comments"]
+        ]
+        assert sorted(documents) == ["d0", "d1", "d2", "d3", "d4"]
+
+    async def test_a_lopsided_corpus_still_reaches_the_small_threads(self) -> None:
+        """566 + 424 + 10 was the measured shape: two giants and everything else."""
+        giant = [
+            make_comment(f"g{index}", document_id="giant", body=LONG_ENOUGH, score=100)
+            for index in range(500)
+        ]
+        small = [make_comment("s0", document_id="small", body=LONG_ENOUGH, score=1)]
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=10))
+        context = _loaded(make_context(config=config), polling=giant + small)
+
+        await CheapPrefilterStep().run(context)
+
+        kept = context.data["counted_comments"]
+        assert "small" in {comment.source_document_id for comment in kept}
+
+    async def test_the_best_scoring_comments_of_a_document_are_taken_first(self) -> None:
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=2))
+        context = _loaded(
+            make_context(config=config),
+            polling=[
+                make_comment("low", body=LONG_ENOUGH, score=1),
+                make_comment("high", body=LONG_ENOUGH, score=99),
+                make_comment("mid", body=LONG_ENOUGH, score=50),
+            ],
+        )
+
+        await CheapPrefilterStep().run(context)
+
+        assert [comment.id for comment in context.data["counted_comments"]] == ["high", "mid"]
+
+    async def test_comments_without_a_score_keep_retrieval_order(self) -> None:
+        """Unknown is not zero, but it has to sort somewhere; it invents no ranking."""
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=2))
+        context = _loaded(
+            make_context(config=config),
+            polling=[make_comment(f"c{index}", body=LONG_ENOUGH) for index in range(4)],
+        )
+
+        await CheapPrefilterStep().run(context)
+
+        assert [comment.id for comment in context.data["counted_comments"]] == ["c0", "c1"]
+
+    async def test_a_prefix_of_the_kept_corpus_is_already_a_broad_sample(self) -> None:
+        """What makes an early stop (§2.12.2) survivable rather than lopsided."""
+        config = ResearchConfig(budget=ResearchBudget(max_ai_analysis_items=12))
+        context = _loaded(make_context(config=config), polling=self._across(4, 10))
+
+        await CheapPrefilterStep().run(context)
+
+        first_four = context.data["counted_comments"][:4]
+        assert len({comment.source_document_id for comment in first_four}) == 4
+
+    async def test_nothing_is_dropped_when_the_budget_covers_the_corpus(self) -> None:
+        context = _loaded(make_context(), polling=self._across(3, 4))
+
+        await CheapPrefilterStep().run(context)
+
+        assert len(context.data["counted_comments"]) == 12
+        assert context.research.diagnostics.flags == []
+
+
 async def test_statistics_record_both_corpora() -> None:
     context = _loaded(
         make_context(),

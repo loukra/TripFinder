@@ -56,4 +56,15 @@ def comment_to_domain(raw: dict[str, Any], *, source_document_id: str) -> Commen
         body=raw.get("body") or "",
         created_at=datetime.fromtimestamp(raw["created_utc"], tz=UTC),
         permalink=_reddit_url(raw["permalink"]),
+        score=_optional_int(raw.get("score")),
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    """A score the payload actually carried, or ``None`` — never a substituted zero."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

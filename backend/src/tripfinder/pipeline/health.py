@@ -139,6 +139,43 @@ def assess_source_health(
     )
 
 
+def reassess_after_analysis(context: PipelineContext, *, comments_analyzed: int) -> None:
+    """Re-apply §8.1's rules once analysis is in, and record the new verdict.
+
+    The first assessment runs *before* comment analysis, deliberately: a
+    total source outage has to stop the run before a token is spent, and at
+    that moment "comments analyzed" can only mean "comments about to be
+    sent". Since §2.12 a failed analysis batch is isolated rather than fatal,
+    so what was sent and what came back can differ — and §8.1 says that gap
+    is accounted exactly like a source failure, feeding rule 2's
+    ``comments_analyzed``.
+
+    Assessing only once would let a run that lost a quarter of its comments
+    to LLM errors finish in the same words as a run that simply found little.
+    That is plan §0.1's forbidden case.
+
+    Only ``comments_analyzed`` and the call accounting are recomputed;
+    ``posts_retrieved`` is carried over, because analysis cannot change how
+    many posts were retrieved. With nothing assessed yet there is nothing to
+    re-assess — that happens only in a test exercising one step alone, never
+    in the real pipeline, where §8.1's health step always runs first.
+    """
+    previous = context.data.get("source_assessment")
+    if not isinstance(previous, SourceAssessment):
+        return
+
+    health = get_recorder(context).snapshot()
+    assessment = assess_source_health(
+        health,
+        posts_retrieved=previous.posts_retrieved,
+        comments_analyzed=comments_analyzed,
+        floors=context.research.research_config.source_health_floors,
+    )
+    context.research.diagnostics.source_health = health
+    context.research.diagnostics.source_outcome = assessment.outcome
+    context.data["source_assessment"] = assessment
+
+
 def terminal_status(outcome: SourceOutcome, *, budget_limited: bool) -> ResearchStatus:
     """The §7.1 terminal state a finished run lands in.
 

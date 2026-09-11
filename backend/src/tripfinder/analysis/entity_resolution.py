@@ -49,9 +49,6 @@ class ResolutionQuestion:
     surface_form: str
     """Verbatim from the comment — the form the deterministic half could not place."""
 
-    normalized_guess: str
-    """What comment analysis (§5) guessed it was. A hint, never an answer."""
-
     entity_type: EntityType
     example_quote: str
     """One comment span that used it, so the model can read it in context."""
@@ -81,7 +78,6 @@ class EntityResolutionBatch(BaseModel):
 def _describe(question: ResolutionQuestion) -> str:
     lines = [
         f"- surface_form: {question.surface_form}",
-        f"  written_as: {question.normalized_guess}",
         f"  used_in: {question.example_quote}",
     ]
     if question.candidates:

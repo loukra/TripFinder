@@ -39,6 +39,64 @@ class Stance(StrEnum):
     MENTION_ONLY = "mention_only"
 
 
+class ReasonCode(StrEnum):
+    """Why a comment's analysis came out the way it did (plan §5, §2.12).
+
+    Replaces the free-text ``reasoning`` sentence Phase 8 asked for. That
+    sentence was 50.2 % of the analysis response payload, for a string no
+    user and no later step ever read.
+
+    **Shrinking it bought no measurable latency**, which is not what 14.6a
+    expected. Median batch latency after the change is 25.6 s against 23.2 s
+    measured before it, both at ``effort=low``; the run's speed came from
+    dispatching batches concurrently, not from a smaller response. The
+    numbers are not perfectly comparable — one batch in isolation against a
+    median of 42 under concurrent load — but they do not support "a smaller
+    payload is faster", so this docstring no longer claims it.
+
+    What the change is worth is the rest of this docstring. Prose can
+    only be read one item at a time; an enum can be counted, which is what
+    plan §0.1 needs from it: a run that returns little should be able to say
+    whether its corpus was off topic, out of scope, or simply mute, rather
+    than leaving "few recommendations" and "we could not see" looking alike.
+
+    ``OTHER`` exists because a forced choice between wrong categories is
+    worse than an honest miss. It is counted like the rest, so a category
+    the corpus needs and this set lacks shows up as a rising number rather
+    than as quietly mislabelled comments (Phase 15 reads it).
+    """
+
+    RECOMMENDS = "recommends"
+    """Names one or more places, in scope, as an answer to the question."""
+
+    RECOMMENDS_OUT_OF_SCOPE = "recommends_out_of_scope"
+    """A real recommendation for somewhere the query did not ask about."""
+
+    CRITERION_MISMATCH = "criterion_mismatch"
+    """On topic and naming places, but not on the criteria — §4.7's downgrade, per comment."""
+
+    ADVISES_AGAINST = "advises_against"
+    """Names places in order to warn about them. Evidence, with a negative stance."""
+
+    MENTION_ONLY = "mention_only"
+    """Names places without judging them — logistics, a correction, an aside."""
+
+    NO_PLACE_NAMED = "no_place_named"
+    """On topic, but recommends nothing nameable: agreement, a joke, a meta-remark."""
+
+    ASKS_A_QUESTION = "asks_a_question"
+    """The commenter is asking, not answering. Common in the threads worth reading."""
+
+    OFF_TOPIC = "off_topic"
+    """Not about the topic at all."""
+
+    UNUSABLE = "unusable"
+    """Too short, not English, or otherwise unreadable (plan §6 drops non-English)."""
+
+    OTHER = "other"
+    """None of the above. Counted, so that a gap in this set is visible."""
+
+
 class ContextType(StrEnum):
     """Whether a SourceDocument is a fair vote or merely topical (plan §4.5)."""
 
@@ -116,6 +174,19 @@ class Comment(BaseModel):
     body: str
     created_at: datetime
     permalink: HttpUrl
+    score: int | None = None
+    """The community's vote total, where the source reports one (plan §2.12).
+
+    Used only to decide *which* comments of a thread are worth the analysis
+    budget when it cannot buy all of them (plan §4.6 step 6) — never to
+    weight an opinion. Plan §4.2 counts independent users, and letting an
+    upvote count twice would be exactly the popularity bias `PROJECT.md` §16
+    deduplicates against.
+
+    ``None`` means the source did not say, which is not the same as zero: a
+    comment nobody voted on and a comment whose score we never learned are
+    different facts, and only one of them is evidence about the comment.
+    """
 
 
 class Opinion(BaseModel):
@@ -292,12 +363,14 @@ class SuppressionReason(StrEnum):
     BUDGET_MAX_TOTAL_POSTS = "budget_max_total_posts"
     BUDGET_MAX_COMMENTS = "budget_max_comments"
     BUDGET_MAX_AI_ANALYSIS_ITEMS = "budget_max_ai_analysis_items"
+    BUDGET_MAX_RESEARCH_DURATION = "budget_max_research_duration"
     RETRIEVAL_SOURCE_FAILURE = "retrieval_source_failure"
     DUPLICATE_COMMENT = "duplicate_comment"
     PREFILTER_TOO_SHORT = "prefilter_too_short"
     PREFILTER_EMPTY_BODY = "prefilter_empty_body"
     ANALYSIS_NO_RESULT = "analysis_no_result"
     ANALYSIS_FABRICATED_QUOTE = "analysis_fabricated_quote"
+    ANALYSIS_BATCH_FAILED = "analysis_batch_failed"
     ENTITY_AMBIGUOUS = "entity_ambiguous"
     ENTITY_UNRESOLVED = "entity_unresolved"
     ENTITY_OFF_GRANULARITY = "entity_off_granularity"
@@ -315,6 +388,34 @@ class Suppression(BaseModel):
     reason: SuppressionReason
     count: int = Field(ge=0)
     detail: str | None = None
+
+
+class QuoteVerdict(StrEnum):
+    """What became of one non-exact supporting quote (plan §2.12.1)."""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class QuoteVerification(BaseModel):
+    """One borderline anti-fabrication decision, kept for review (plan §2.12.1).
+
+    Written for every verification that was **not** an exact substring
+    match — accepted and rejected alike. Only recording the rejections would
+    answer half the question: the threshold is worth revisiting both for what
+    it dropped just below the line and for what it admitted just above it.
+    """
+
+    comment_id: str = Field(min_length=1)
+    mention_text: str = Field(min_length=1)
+    """The surface form the discarded or kept mention named."""
+
+    claimed_quote: str = Field(min_length=1)
+    matched_span: str
+    """The closest stretch of the comment, normalised. Empty when nothing matched."""
+
+    similarity: float = Field(ge=0.0, le=1.0)
+    verdict: QuoteVerdict
 
 
 class ResearchFlag(StrEnum):
@@ -369,6 +470,8 @@ class ResearchDiagnostics(BaseModel):
     source_outcome: SourceOutcome | None = None
     triage_decisions: list[TriageDecision] = Field(default_factory=list)
     entity_resolutions: list[EntityResolutionOutcome] = Field(default_factory=list)
+    quote_verifications: list[QuoteVerification] = Field(default_factory=list)
+    """Non-exact anti-fabrication decisions (plan §2.12.1), for Phase 15 to calibrate against."""
     suppressions: list[Suppression] = Field(default_factory=list)
     flags: list[ResearchFlag] = Field(default_factory=list)
     failure: ResearchFailure | None = None

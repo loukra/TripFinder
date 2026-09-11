@@ -68,9 +68,7 @@ def _positive(analysis: CommentAnalysis) -> bool:
 
 
 def _names(analysis: CommentAnalysis) -> str:
-    return " | ".join(
-        f"{mention.raw_text}->{mention.normalized_guess}" for mention in analysis.mentions
-    )
+    return " | ".join(mention.raw_text for mention in analysis.mentions)
 
 
 @pytest.mark.parametrize("entry", ALL, ids=lambda entry: str(entry.id))
@@ -82,7 +80,7 @@ async def test_every_comment_is_analysed(entry: LabeledComment) -> None:
 async def test_relevance_matches_the_label(entry: LabeledComment) -> None:
     analysis = (await _analysed())[entry.id]
 
-    assert (analysis.topic_relevance >= 0.5) is entry.expect_relevant, analysis.reasoning
+    assert (analysis.topic_relevance >= 0.5) is entry.expect_relevant, analysis.reason_code
 
 
 RECOMMENDING = [entry for entry in ALL if entry.mention is not None]
@@ -90,12 +88,19 @@ RECOMMENDING = [entry for entry in ALL if entry.mention is not None]
 
 @pytest.mark.parametrize("entry", RECOMMENDING, ids=lambda entry: str(entry.id))
 async def test_the_expected_places_are_recognised(entry: LabeledComment) -> None:
-    """Including the ones named only by nickname — the acceptance criterion."""
+    """Including the ones named only by nickname — the acceptance criterion.
+
+    What is asserted is the *surface form*: this step has to find the span
+    that names a place, including "the Beaver State", where no keyword
+    filter would. Turning that span into Oregon is §4.6 step 8's job and is
+    measured in ``test_entity_resolution_quality`` — since 14.6a removed
+    ``normalized_guess``, the model is no longer asked to do both at once.
+    """
     assert entry.mention is not None
     analysis = (await _analysed())[entry.id]
-    guesses = " ".join(mention.normalized_guess.lower() for mention in analysis.mentions)
+    found = " ".join(mention.raw_text.lower() for mention in analysis.mentions)
 
-    assert entry.mention.entity.lower() in guesses, _names(analysis)
+    assert entry.mention.raw_text.lower() in found, _names(analysis)
 
 
 @pytest.mark.parametrize("entry", ALL, ids=lambda entry: str(entry.id))

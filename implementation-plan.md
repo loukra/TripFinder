@@ -87,9 +87,15 @@ maxPostsPerQuery       25
 maxTotalPosts         120
 maxComments          4000    # retrieved, before pre-filter
 maxAIAnalysisItems   1000    # after pre-filter, sent to the LLM
-maxResearchDuration   300s
+maxResearchDuration   300s   # whole research. Enforced from Phase 14.6 (§2.12.2) by refusing
+                             # to admit new work; in-flight calls always finish
+tailReserve            60s   # subtracted from it to derive the dispatch deadline
 maxEstimatedCostUSD  0.50    # hard stop
 ```
+
+`maxAIAnalysisItems` is a ceiling on the *total*, never a licence to spend it on the first few
+documents: from Phase 14.6 the budget is distributed across every surviving document (§2.12), so
+breadth of discussions is a property of the sample, not an accident of ordering.
 
 Source-health floors (§8.1) — a research that breaches these **fails**, it does not report:
 
@@ -359,6 +365,175 @@ hydrate path batches ≤500 ids per request; the discovery loop still cannot exc
 
 ---
 
+### 2.12 The pipeline is unusably slow and samples too narrowly — **Phase 14.6 added**
+
+The first full real run after §2.11 completed as `completed_partial` in **2408 s** against §1.1's
+`maxResearchDuration` of 300 s and its stated target of "~2–4 minutes". The run before it died at
+1487 s on a single OpenAI connection error, losing 24 minutes of finished work. Neither is a tuning
+question; both are defects, and both were invisible because nothing reads the duration budget.
+
+**Where the time goes,** measured over the full run (66 LLM calls):
+
+| Step | Calls | Time |
+|---|---|---|
+| Comment analysis | 50 | **2245.9 s (93 %)** |
+| Everything else combined | 16 | 106.3 s |
+
+Comment analysis runs its batches **strictly sequentially** (`comment_analysis.py`,
+`for batch in _batched(...): await self._analyse(...)`), so 1000 comments ÷ 20 = 50 round trips
+in series.
+
+**What makes one call slow.** Measured on one real 20-comment batch: input 1782 tokens, output
+2470. Latency tracks output, and the output is mostly not the answer:
+
+| Response field | Share of JSON payload |
+|---|---|
+| `reasoning` (one prose sentence per comment, never shown to a user) | **50.2 %** |
+| `mentions.supporting_quote` (the §5 anti-fabrication evidence) | 20.6 % |
+| `mentions.raw_text` | 5.1 % |
+| `mentions.normalized_guess` (Phase 9 recomputes it anyway) | 5.0 % |
+| every numeric/enum field together | ~12 % |
+
+`reasoning.effort` is a smaller lever than it looks: default 32.7 s, `low` 23.2 s, `none` 20.7 s,
+with 20/20 comments analysed at every level. §2.10 already said the first phase to call the
+provider should set it deliberately; Phase 8 did not.
+
+**The sampling defect is separate, and worse.** `prefilter.py` fills the analysis budget with
+`_truncate(counted, max_items)` — the *first* N comments in document order. In the measured run
+that meant **3 of 81 surviving threads** supplied every counted opinion (566 + 424 + 10 comments);
+threads 4–81 contributed nothing, and no `topical` thread was retrieved at all. Raising the budget
+does not fix this: it would buy the first 15 threads instead of the first 3.
+
+This matters beyond volume. Each thread is a *different population* — r/AskAnAmerican, r/hiking and
+r/mountainbiking are not the same people answering. Sampling three threads samples three
+communities. It also silently caps `discussion_count`, which §4.2 uses to signal corroboration
+across independent discussions: the measured top result's "3 threads" was the ceiling, not a
+finding.
+
+**Resolution:** insert **Phase 14.6**, before Phase 15, covering six changes — shrink the analysis
+response, run batches concurrently, isolate batch failure, sample every thread, enforce the
+duration budget, and make quote verification tolerant of formatting while keeping it deterministic.
+
+Phase 15 stays the phase that *tunes* (budget size, triage thresholds, effort level). 14.6 only
+makes the instrument usable and honest; the test for what belongs here is **"does it change a
+number the user reads?"** — if yes, it waits for measurement.
+
+#### 2.12.1 Quote verification stays deterministic — the rule is relaxed, not removed
+
+§5's anti-fabrication rule discards any mention whose `supporting_quote` is not an exact substring
+of the comment. Nine discarded mentions from the measured run were inspected by hand against their
+source comments:
+
+* **six** genuinely contained the named place and failed only on formatting — a doubled space, a
+  parenthesis (`Hot Springs (National Park)`), capitalisation;
+* **three did not**, and those are the reason the rule exists:
+  * a comment praising *"the shore of Lake **Huron**"* produced a mention of **Lake Michigan** —
+    a real person's real opinion, attached to the wrong place, in the run whose top result was
+    Michigan;
+  * a comment about Michigan mosquitoes and South Haven produced a mention of **Detroit**, a city
+    it never names — inference presented as testimony.
+
+Neither is an invented *place*; both are invented *attributions*, and both are invisible after the
+fact because the number, the source and the person are all real. Extrapolated from this sample,
+roughly two thirds of the run's 43 discards (1.5 % of 2915 mentions) were recoverable formatting
+misses and one third were genuine misattributions.
+
+**So:** normalise both sides (case, whitespace runs, typographic quotes and dashes), then accept a
+fuzzy match at **≥ 0.90 similarity**; below that, discard. The check stays deterministic and the
+quote stays findable in the original comment by a human — which an LLM self-assessment could not
+promise, since the model that wrote `Lake Michigan` wrote it confidently.
+
+**Audit trail (required, not optional).** Every verification that is not an exact match — accepted
+*and* rejected — records the claimed quote, the best-matching span, the similarity score and the
+verdict. Without it the 0.90 threshold is a guess nobody can revisit: the two questions worth
+asking later are "what was admitted just above the line that should not have been" and "what was
+dropped just below it that should have stayed", and both need the borderline cases kept. Phase 15
+calibrates the threshold from this record.
+
+#### 2.12.2 The duration limit stops admission, never completion
+
+A deadline that cancels work in flight throws away tokens that are already paid for and gets
+nothing back for them — the request was billed the moment it was sent, so abandoning the response
+buys no saving, only a smaller sample. The limit therefore gates **what may still be started**, not
+what may finish.
+
+Three rules, in order of precedence:
+
+1. **No new expensive work is admitted after the deadline.** In comment analysis this is the
+   dispatch loop: once the deadline passes, no further batch is sent.
+2. **Everything already in flight is awaited and its result is kept.** Because batches run
+   concurrently (14.6b) the overrun this can cause is bounded by *one* batch — the per-call timeout,
+   not the sum of the outstanding ones.
+3. **Point of no return: the first successful analysis batch.** After it, every remaining step runs
+   to completion regardless of the clock. Steps 8–14 are entity resolution, deduplication, time
+   weighting, aggregation, ranking, summarization and persistence; measured against analysis they
+   are almost free, and stopping there would mean paying for the whole corpus and delivering
+   nothing. A run that has evidence always turns it into a result.
+
+**So the 300 s is a promise about the whole research, and the dispatch deadline is derived from it,
+not equal to it:** `admission_deadline = started_at + maxResearchDuration − tailReserve`, with
+`tailReserve` in config. Stating it the other way round — deadline at 300 s, then a tail on top —
+would make the user's five minutes mean seven, which is the kind of quiet redefinition §0.1 exists
+to prevent.
+
+**Floor.** The analysis step always dispatches at least one concurrent wave, even if the deadline
+has already passed when it starts. A run that spent query understanding, triage and retrieval and
+then analysed nothing is the worst possible outcome: full cost, zero evidence, and a result page
+that cannot say anything. One wave is one batch-latency long.
+
+**Accounting (§8.1, §0.1).** Comments that were never dispatched are **budget-limited**, not
+**failed**, and the two are counted separately — `comments_not_analysed_budget` against
+`comments_lost_to_errors`. They mean different things to a reader: the first says "we stopped on
+purpose and this sample is valid but smaller", the second says "we tried and could not see". §7.1
+already separates these as `completed_partial` and `completed_degraded`; the counters are what let
+the runner tell them apart.
+
+#### 2.12.3 What the verification run measured
+
+One real run after 14.6a-f, same query as the 2408 s measurement
+(*"Most underrated US states for nature"*), real Serper and real OpenAI.
+
+| | before (§2.12) | after |
+|---|---|---|
+| Whole run | 2408 s | **282.5 s**, `completed_partial` |
+| Comment analysis | 2245.9 s / 50 calls | **147.1 s / 42 calls** |
+| Threads contributing counted opinions | 3 of 81 | **12-13 of 13** |
+| Top result's `discussion_count` | 3 (the ceiling) | **12** |
+| Mentions discarded for an unusable quote | 43 / 2915 = 1.5 % | **2 / 2121 = 0.09 %** |
+
+**The two runs did not see the same corpus** — 81 threads survived triage then, 20 now — because
+discovery is agentic and not deterministic. Structural numbers are comparable; the result *list*
+is not.
+
+**What worked.** 42 analysis calls totalling 1077.8 s of call time finished in 147.1 s of wall
+clock: a 7.3x compression against a ceiling of 8. The admission deadline fired exactly as §2.12.2
+describes — 8 batches refused, 160 comments recorded as budget-limited, none lost to errors, and
+the run landed at `completed_partial` naming its limiting factor. The in-flight tail ran 24.9 s
+past the deadline and the whole run used 42.5 s of the 60 s `tailReserve`. `reason_code` needed no
+`OTHER` in 840 comments, so the closed set covers a real corpus.
+
+**What did not.** Shrinking the analysis response bought no measurable latency (see §5). 14.6a
+stands on countability.
+
+**Three findings this run produced, none of them inside 14.6's scope:**
+
+1. **Retrieval is now the breadth ceiling.** 18 documents survived triage as `polling`; **13 were
+   retrieved**, because `maxComments` fills in *document order* — the same defect §2.12 found in
+   pre-filter, one step earlier. `documents_retrieved` against `documents_polling` makes it
+   visible, so it is not a §0.1 violation, but the sample is still lopsided.
+2. **Discovery is the second-largest cost** at 56.6 s (20 %), fully sequential: 11 model calls and
+   10 searches, none overlapping.
+3. **61 % of extracted mentions are off-granularity** (1284 of 2121) — paid-for output a
+   state-tier question cannot use.
+
+The quote audit trail earned its place immediately. Both rejections were the failure §2.12.1
+describes — one claimed *"Vermont ... is so incredibly beautiful in fall"* where the comment said
+*"new england is so incredibly beautiful in fall"* — and the accepted near-misses were almost all
+**markdown markup** (`*western* virginia`, `[nature reserve]`), which suggests a cheap
+deterministic fold Phase 15 can now justify from data rather than guess at.
+
+---
+
 ## 3. Architecture
 
 Unchanged from `PROJECT.md` §4–6: **Modular Monolith + Ports & Adapters + Research Pipeline +
@@ -539,8 +714,8 @@ branch to clarification (§6), and **Document Triage is added** as its own step.
 | 3 | Agentic Source Discovery | **AI** | Bounded, via the web search tool; hydrated through the source adapter (§2.11) |
 | 4 | **Source Document Triage** | **AI** + rules | **New — §4.7. Gates everything downstream** |
 | 5 | Content Retrieval | no | Comment trees for surviving documents only |
-| 6 | Cheap Pre-filtering | no | Heuristics; embeddings deferred |
-| 7 | Comment Analysis | **AI** | Merged relevance + entity + opinion (§5) |
+| 6 | Cheap Pre-filtering | no | Heuristics; **budget spread across every document** (§2.12); embeddings deferred |
+| 7 | Comment Analysis | **AI** | Merged relevance + entity + opinion (§5). **Batches run concurrently and fail independently** (§2.12) |
 | 8 | Entity Resolution | rules → **AI** | Deterministic first, AI for ambiguity only |
 | 9 | User Deduplication | no | One user, one entity, one research |
 | 10 | Time Weighting | no | |
@@ -607,7 +782,6 @@ coerced.
 ```python
 class EntityMention(BaseModel):
     raw_text: str                  # verbatim from the comment
-    normalized_guess: str
     entity_type: EntityType        # country|region|state|city|town|park|beach|trail|island|other
     stance: Stance                 # positive|negative|mixed|mention_only
     strength: float                # 0.0-1.0, enthusiasm of the recommendation
@@ -620,13 +794,40 @@ class CommentAnalysis(BaseModel):
     scope_match: bool              # inside the query's geographic scope
     overall_confidence: float      # 0.0-1.0
     mentions: list[EntityMention]
-    reasoning: str                 # one sentence, for debugging
+    reason_code: ReasonCode        # closed enum, for debugging — see §2.12
 ```
 
+`reasoning` became `reason_code`, a closed enum: the free-text sentence was 50.2 % of the response
+payload and nobody read it. An enum can be *counted*, which is what §0.1 wanted from it — a thin
+run can now say whether its corpus was off topic, out of scope or simply mute.
+
+**The latency argument for this change did not survive measurement** (§2.12.3). 14.6a was written
+expecting a smaller response to be a faster one; the verification run shows median batch latency of
+25.6 s against 23.2 s before, both at `effort=low`. The change is justified by countability alone,
+and the plan says so rather than leaving a tidier claim standing.
+
+**`normalized_guess` was removed in §2.12, and not for the reason first written here.** Phase 9 did
+consume it, in two places: as a fallback catalogue key when the verbatim surface form missed, and as
+a `written_as:` hint in the resolution prompt. The first is the reason to remove it. A hit on a
+*guessed* canonical name was recorded as `decided_by=RULE` at `confidence=1.0` — a model's judgement
+wearing a catalogue's badge, in a step §4.6 calls "deterministic first". §2.12.1 established that
+this model guesses wrong names confidently (`Lake Huron` → `Lake Michigan`), so the failure is not
+hypothetical, and it was invisible: the resolution looked like a rule. The path was also untested —
+every fixture set `normalized_guess = raw_text`, which makes the fallback ask the catalogue the same
+question twice.
+
+**The consequence, stated rather than discovered later.** Surface forms the catalogue does not hold
+but whose guess it would have held now go to the AI resolution step instead of resolving by rule.
+`entity_forms_resolved_by_rule` falls and `entity_forms_resolved_by_ai` rises by the same amount;
+both are already in §8.1's statistics, so the shift is visible. Phase 15 measures whether AI
+resolution recovers those forms as accurately, and at what cost.
+
 **Anti-fabrication rule (`PROJECT.md` §29 "never silently invent evidence"):** every
-`supporting_quote` is verified by exact substring match against the stored comment body. A mention
-whose quote is not found is **discarded and counted in a `fabricated_quote` metric**. This is a
-deterministic check, not a prompt instruction, and it is tested.
+`supporting_quote` is verified against the stored comment body — **normalised, then matched at
+≥0.90 similarity** (§2.12.1). A mention whose quote does not reach the threshold is **discarded and
+counted in a `fabricated_quote` metric**; every non-exact decision, accepted or rejected, is written
+to the verification audit trail. This is a deterministic check, not a prompt instruction, and it is
+tested.
 
 ---
 
@@ -799,6 +1000,13 @@ class SourceHealth(BaseModel):
 adapter (`PROJECT.md` §11) and count as failures only after retries are exhausted. A single 429 is
 not an outage.
 
+**The LLM is accounted the same way (§2.12).** From Phase 14.6 an analysis batch that fails is
+isolated rather than fatal, which means the run can now finish having analysed less than it
+retrieved. That gap is evidence suppression under §0.1, so it is recorded exactly like a source
+failure — batches attempted, batches failed, comments lost, failure kinds — and it feeds rule 2's
+`comments_analyzed`. A run that lost a quarter of its comments to LLM errors must not be
+presentable as a run that found little.
+
 **Never substitute.** When the source is unavailable the system does not fall back to cached data
 from a different research, does not fill gaps from the LLM's own knowledge, and does not soften the
 error into an empty result. `PROJECT.md` §29: never fabricate source data.
@@ -859,7 +1067,8 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | 13 | API hardening | 3.5, 12 | Full endpoints, cancellation, error contract, OpenAPI, **composition root switched to the real pipeline** |
 | 14 | Frontend | 13 | Search, clarification, progress, results, evidence drill-down, empty states |
 | **14.5** | **Search-backed discovery** | 6, 14 | **§2.11. `WebSearchProvider` port, fake + Serper impls, `SEARCH_PROVIDER` default fake, Reddit-URL → post-id extraction, batch hydration via `posts/ids`, discovery step rewritten, §8.1 accounting over both dependencies** |
-| 15 | Evaluation | 14.5 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
+| **14.6** | **Throughput and sampling breadth** | 14.5 | **§2.12. Enum reason codes replace prose, concurrent analysis batches, configurable `reasoning.effort` (default `low`), per-batch failure isolation, per-thread sampling with comment `score`, `maxResearchDuration` enforced as an admission gate (in-flight work always finishes), fuzzy quote verification + audit trail** |
+| 15 | Evaluation | 14.6 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
 
@@ -929,6 +1138,21 @@ say"; a non-post Reddit URL (subreddit page, user page, comment permalink of an 
 discarded before any hydrate call; hydration batches at most 500 ids per request; the discovery
 loop still cannot exceed `maxSearchQueries` or issue a near-duplicate query; §8.1 health records
 the search provider and Arctic Shift separately.
+
+**Phase 14.6 — acceptance (§2.12):** every kept document contributes comments to analysis whenever
+the budget allows more than one per document, and a test proves no single document can consume the
+whole budget while others get none; analysis batches run concurrently under a configured ceiling,
+and a test proves the ceiling is respected; one batch failing leaves every other batch's result in
+place, is recorded in §8.1 with its count, and a test proves the resulting run is distinguishable
+from a genuinely thin one; `maxResearchDuration` is enforced by refusing to admit new work, and a
+test proves that a batch in flight when the deadline passes is still awaited and its result kept,
+that no batch is dispatched after it, and that a run which has already analysed something always
+reaches a persisted result; expiry yields `completed_partial` naming the limiting factor, never
+`completed`, and undispatched comments are counted separately from comments lost to errors;
+`reasoning.effort` is read from
+config with a documented default and no model parameter is hard-coded outside it; quote
+verification accepts a normalised ≥0.90 match and records every non-exact decision — accepted and
+rejected — with claimed quote, best-matching span, score and verdict, retrievable for review.
 
 **Phase 15 — benchmarks:** underrated US states for nature; US national parks avoiding crowds;
 underrated European road-trip regions; best regions for cycling and nature. For each: inspect a

@@ -36,7 +36,7 @@ from tripfinder.analysis.comment_analysis import (
     CommentAnalysisBatch,
     EntityMention,
 )
-from tripfinder.domain.models import Comment, EntityType, Stance
+from tripfinder.domain.models import Comment, EntityType, ReasonCode, Stance
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "comment_analysis" / "labeled_comments.json"
 
@@ -89,8 +89,23 @@ class LabeledComment:
             scope_match=True,
             overall_confidence=0.5 if self.label == "ambiguous" else 0.9,
             mentions=self._mentions(),
-            reasoning=f"labeled fixture: {self.label}",
+            reason_code=self._reason_code(),
         )
+
+    def _reason_code(self) -> ReasonCode:
+        """Derived from what the fixture claims, not from its label.
+
+        The label names the *kind of reading* a comment demands; the reason
+        code names what the reading found. Deriving one from the other by
+        hand would let the two drift apart silently.
+        """
+        if not self.expect_relevant:
+            return ReasonCode.OFF_TOPIC
+        if self.mention is None:
+            return ReasonCode.NO_PLACE_NAMED
+        if self.expect_positive:
+            return ReasonCode.RECOMMENDS
+        return ReasonCode.MENTION_ONLY
 
     def _mentions(self) -> list[EntityMention]:
         if self.mention is None:
@@ -98,7 +113,6 @@ class LabeledComment:
         return [
             EntityMention(
                 raw_text=self.mention.raw_text,
-                normalized_guess=self.mention.entity,
                 entity_type=self.mention.entity_type,
                 stance=Stance.POSITIVE if self.expect_positive else Stance.MIXED,
                 strength=0.8 if self.expect_positive else 0.4,

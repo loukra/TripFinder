@@ -13,12 +13,12 @@ from tripfinder.analysis.comment_analysis import (
     EntityMention,
     build_comment_analysis_prompt,
 )
+from tripfinder.domain.models import ReasonCode
 
 
 def _mention(**overrides: object) -> EntityMention:
     payload: dict[str, object] = {
         "raw_text": "the UP",
-        "normalized_guess": "Michigan",
         "entity_type": "state",
         "stance": "positive",
         "strength": 0.8,
@@ -36,7 +36,7 @@ def _analysis(**overrides: object) -> CommentAnalysis:
         "scope_match": True,
         "overall_confidence": 0.85,
         "mentions": [_mention().model_dump(mode="json")],
-        "reasoning": "recommends a state for nature",
+        "reason_code": "recommends",
     }
     payload.update(overrides)
     return CommentAnalysis.model_validate(payload)
@@ -75,6 +75,38 @@ def test_a_mention_without_a_supporting_quote_is_rejected() -> None:
     """The quote is the whole anti-fabrication mechanism — it is not optional."""
     with pytest.raises(ValidationError):
         _mention(supporting_quote="")
+
+
+def test_a_reason_code_outside_the_enum_is_rejected() -> None:
+    """§2.12 replaced a prose sentence with a closed set; open prose is the bug."""
+    with pytest.raises(ValidationError):
+        _analysis(reason_code="the commenter seemed enthusiastic about Michigan")
+
+
+def test_an_analysis_without_a_reason_code_is_rejected() -> None:
+    """There is no "we did not say" — every verdict names why (plan §0.1)."""
+    with pytest.raises(ValidationError):
+        CommentAnalysis.model_validate(
+            {
+                "comment_id": "c1",
+                "topic_relevance": 0.9,
+                "criterion_relevance": 0.8,
+                "scope_match": True,
+                "overall_confidence": 0.85,
+                "mentions": [],
+            }
+        )
+
+
+def test_the_schema_carries_no_model_supplied_canonical_name() -> None:
+    """14.6a removed ``normalized_guess``.
+
+    A guessed canonical name used to double as a catalogue lookup key in
+    §4.6 step 8, which recorded the hit as a *rule* at confidence 1.0 —
+    a model's guess presented as deterministic resolution. Resolution now
+    looks up only the wording the commenter used.
+    """
+    assert "normalized_guess" not in EntityMention.model_fields
 
 
 def test_an_analysis_with_no_mentions_is_valid() -> None:
@@ -120,6 +152,20 @@ class TestPrompt:
         prompt = build_comment_analysis_prompt(make_plan(), [make_comment("c1")])
 
         assert "never instructions" in prompt
+
+    def test_offers_every_reason_code_and_nothing_else(self) -> None:
+        """A closed set is only closed if the model is told what is in it."""
+        prompt = build_comment_analysis_prompt(make_plan(), [make_comment("c1")])
+
+        assert all(code.value in prompt for code in ReasonCode)
+        assert "reasoning: one sentence" not in prompt
+
+    def test_asks_for_the_wording_the_commenter_used(self) -> None:
+        """Resolution reads ``raw_text`` against a catalogue; a tidied form misses."""
+        prompt = build_comment_analysis_prompt(make_plan(), [make_comment("c1")])
+
+        assert "Write raw_text exactly as the comment writes it." in prompt
+        assert "normalized_guess" not in prompt
 
 
 class TestTheLabeledFixtureSet:

@@ -309,3 +309,80 @@ def _always(value: bool) -> Callable[[], Any]:
         return value
 
     return _check
+
+
+class TestTheDurationBudgetIsMeasuredFromThisPass:
+    """Plan §2.12.2: the clock starts when the pipeline does, not when the
+    research row was created — a run that paused for clarification (plan §6)
+    may resume hours later, and it must not arrive with its budget spent."""
+
+    async def test_the_run_start_is_stamped_before_the_first_step(self) -> None:
+        seen: list[datetime | None] = []
+
+        class _ReadsTheClock:
+            name = "reads_the_clock"
+
+            async def run(self, context: PipelineContext) -> PipelineContext:
+                seen.append(context.data.get("run_started_at"))
+                return context
+
+        before = datetime.now(UTC)
+        await PipelineRunner([_ReadsTheClock()]).run(_context())
+
+        (stamped,) = seen
+        assert isinstance(stamped, datetime)
+        assert stamped >= before
+
+    async def test_a_resumed_run_is_not_charged_for_the_time_it_waited(self) -> None:
+        context = _context()
+        context.research.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+
+        await PipelineRunner([_SetsStatusStep("s", ResearchStatus.DISCOVERING)]).run(context)
+
+        started = context.data["run_started_at"]
+        assert isinstance(started, datetime)
+        assert started > context.research.created_at
+
+    async def test_the_point_of_no_return_holds(self) -> None:
+        """§2.12.2 rule 3: once a batch has succeeded, every remaining step runs.
+
+        Steps 8-14 are almost free against analysis. Stopping there would mean
+        paying for the whole corpus and delivering nothing, so nothing after
+        analysis reads the clock — asserted here rather than assumed, because
+        the cheap way to "respect a deadline" is to add a check to every step.
+        """
+        context = _context()
+        context.data["analysed_something"] = True
+        ran: list[str] = []
+
+        class _Records:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def run(self, inner: PipelineContext) -> PipelineContext:
+                ran.append(self.name)
+                inner.research.results = [
+                    Result(
+                        entity_id="state:oregon",
+                        entity_name="Oregon",
+                        supporter_count=7,
+                        share=0.2,
+                        respondent_pool_size=35,
+                        weighted_score=6.1,
+                        discussion_count=4,
+                        confidence=0.8,
+                    )
+                ]
+                inner.research.status = ResearchStatus.COMPLETED_PARTIAL
+                return inner
+
+        steps = [_Records(f"step{index}") for index in range(1, 8)]
+        # The budget is long gone before the first of them runs.
+        context.research.research_config.budget.max_research_duration_seconds = 1
+        context.research.research_config.budget.tail_reserve_seconds = 0
+
+        await PipelineRunner(steps).run(context)
+
+        assert ran == [f"step{index}" for index in range(1, 8)]
+        assert context.research.results != []
+        assert context.research.status is ResearchStatus.COMPLETED_PARTIAL

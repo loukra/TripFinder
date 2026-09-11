@@ -20,6 +20,25 @@ class ResearchBudget(BaseModel):
     max_comments: int = Field(default=4000, gt=0)
     max_ai_analysis_items: int = Field(default=1000, gt=0)
     max_research_duration_seconds: int = Field(default=300, gt=0)
+    tail_reserve_seconds: int = Field(default=60, ge=0)
+    """Subtracted from the duration budget to derive the dispatch deadline (plan §2.12.2).
+
+    The limit gates what may still be *started*, never what may finish: a
+    request is billed the moment it is sent, so abandoning its response buys
+    no saving, only a smaller sample. Work already in flight is therefore
+    always awaited, which means the deadline alone would overrun the budget
+    by up to one batch.
+
+    So the 300 s stays the promise about the whole research and the dispatch
+    deadline is derived from it — ``started_at + maxResearchDuration −
+    tailReserve`` — rather than the other way round. Stating it the other way
+    would make the user's five minutes mean seven, which is the kind of quiet
+    redefinition §0.1 exists to prevent.
+
+    60 s is a starting value, not a measured one. Phase 15 calibrates it
+    against real runs.
+    """
+
     max_estimated_cost_usd: float = Field(default=0.50, gt=0.0)
 
 
@@ -69,6 +88,19 @@ class EntityResolutionConfig(BaseModel):
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
+class QuoteVerificationConfig(BaseModel):
+    """The anti-fabrication check's tolerance (plan §5, §2.12.1).
+
+    0.90 is a starting threshold with a hand-inspected sample behind it, not
+    a measured optimum: of nine discards read against their comments, six
+    were formatting misses that this admits and three were genuine
+    misattributions that it still rejects. Phase 15 calibrates it from the
+    audit trail, which is why every borderline decision is kept.
+    """
+
+    similarity_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+
+
 class RankingKey(StrEnum):
     """Which computed number decides sort order first (plan §2.5, §4.3).
 
@@ -111,4 +143,5 @@ class ResearchConfig(BaseModel):
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)
+    quote_verification: QuoteVerificationConfig = Field(default_factory=QuoteVerificationConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)

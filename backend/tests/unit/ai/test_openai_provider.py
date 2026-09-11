@@ -41,6 +41,7 @@ from tripfinder.ai.errors import (
     LLMUnavailableError,
 )
 from tripfinder.ai.openai import OpenAIProvider
+from tripfinder.ai.openai.config import OpenAIConfig, ReasoningEffort
 from tripfinder.domain.models import FailureKind
 from tripfinder.domain.ports import LLMProvider
 
@@ -84,6 +85,34 @@ class TestTheHappyPath:
         assert body["model"] == "gpt-5-nano"
         assert body["max_output_tokens"] == 321
         assert body["input"] == "classify this"
+
+    async def test_sends_the_configured_reasoning_effort(self) -> None:
+        """Plan §2.10/§2.12: the effort is set deliberately, not inherited."""
+        seen: list[httpx2.Request] = []
+        provider = stubbed_provider(
+            json_handler(200, response_body({"verdict": "polling", "confidence": 0.5}), seen=seen),
+            config=fast_config(reasoning_effort=ReasoningEffort.LOW),
+        )
+
+        await provider.complete_structured(prompt="classify", response_model=Verdict)
+
+        assert json.loads(seen[0].content)["reasoning"] == {"effort": "low"}
+
+    async def test_the_default_effort_is_low(self) -> None:
+        """The measured 23.2 s against a default of 32.7 s, per batch, 50 batches."""
+        assert OpenAIConfig().reasoning_effort is ReasoningEffort.LOW
+
+    async def test_no_configured_effort_sends_no_reasoning_parameter(self) -> None:
+        """Omitting the field and asking for "none" are different requests."""
+        seen: list[httpx2.Request] = []
+        provider = stubbed_provider(
+            json_handler(200, response_body({"verdict": "polling", "confidence": 0.5}), seen=seen),
+            config=fast_config(reasoning_effort=None),
+        )
+
+        await provider.complete_structured(prompt="classify", response_model=Verdict)
+
+        assert "reasoning" not in json.loads(seen[0].content)
 
     async def test_asks_for_the_response_model_as_a_strict_schema(self) -> None:
         """`PROJECT.md` demands validated structured output, not free text to parse."""

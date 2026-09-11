@@ -24,6 +24,7 @@ from tripfinder.domain.models import (
     EntityResolutionMethod,
     EntityResolutionOutcome,
     EntityType,
+    ReasonCode,
     ResearchStatus,
     Stance,
     SuppressionReason,
@@ -57,13 +58,11 @@ class RecordingLLM:
 def mention(
     raw_text: str,
     *,
-    guess: str | None = None,
     entity_type: EntityType = EntityType.STATE,
     quote: str = "a verbatim span",
 ) -> EntityMention:
     return EntityMention(
         raw_text=raw_text,
-        normalized_guess=guess or raw_text,
         entity_type=entity_type,
         stance=Stance.POSITIVE,
         strength=0.8,
@@ -79,7 +78,7 @@ def analysis(comment_id: str, *mentions: EntityMention) -> CommentAnalysis:
         scope_match=True,
         overall_confidence=0.9,
         mentions=list(mentions),
-        reasoning="fixture",
+        reason_code=ReasonCode.RECOMMENDS,
     )
 
 

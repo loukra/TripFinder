@@ -18,8 +18,9 @@ from __future__ import annotations
 from typing import Any
 
 import openai
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, Omit, omit
 from openai.types.responses import ParsedResponse
+from openai.types.shared_params import Reasoning
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from tripfinder.ai.errors import (
@@ -76,9 +77,12 @@ def _unusable_output_detail(response: ParsedResponse[Any]) -> str:
 class OpenAIProvider:
     """Plan §1's locked provider, satisfying :class:`LLMProvider`.
 
-    Retries, timeouts and the token cap are the SDK's, driven by
-    :class:`OpenAIConfig` — the same division ``ArcticShiftClient`` uses,
-    where policy is configuration and this class only maps failures.
+    Retries, timeouts, the token cap and the reasoning effort are the SDK's,
+    driven by :class:`OpenAIConfig` — the same division ``ArcticShiftClient``
+    uses, where policy is configuration and this class only maps failures.
+    Plan §2.10 asked that the first phase to call the provider set the effort
+    deliberately rather than inherit whatever the model defaults to; §2.12
+    measured what it is worth and 14.6b sets it.
     """
 
     def __init__(
@@ -90,6 +94,19 @@ class OpenAIProvider:
     ) -> None:
         self._config = config or OpenAIConfig()
         self._client = client if client is not None else _build_client(self._config, api_key)
+
+    def _reasoning(self) -> Reasoning | Omit:
+        """The configured effort, or the SDK's "say nothing" sentinel.
+
+        Omitting the parameter and sending ``effort=None`` are different
+        requests — the first leaves the model on its own default, the second
+        asks for no reasoning at all — so a missing config value must not
+        turn into a value (plan §2.10).
+        """
+        effort = self._config.reasoning_effort
+        if effort is None:
+            return omit
+        return Reasoning(effort=effort.value)
 
     async def complete_structured[T: BaseModel](
         self, *, prompt: str, response_model: type[T]
@@ -103,6 +120,7 @@ class OpenAIProvider:
                 input=prompt,
                 text_format=response_model,
                 max_output_tokens=self._config.max_output_tokens,
+                reasoning=self._reasoning(),
             )
         except (openai.AuthenticationError, openai.PermissionDeniedError) as exc:
             raise LLMCredentialError(f"OpenAI rejected the API key: {exc}") from exc
