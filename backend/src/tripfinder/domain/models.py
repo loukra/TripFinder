@@ -43,12 +43,18 @@ class ReasonCode(StrEnum):
     """Why a comment's analysis came out the way it did (plan §5, §2.12).
 
     Replaces the free-text ``reasoning`` sentence Phase 8 asked for. That
-    sentence was 50.2 % of the analysis response payload, and latency tracks
-    output tokens, so it was also the single most expensive field in the
-    pipeline's most expensive step — for a string no user and no later step
-    ever read.
+    sentence was 50.2 % of the analysis response payload, for a string no
+    user and no later step ever read.
 
-    A closed set keeps what the sentence was actually good for. Prose can
+    **Shrinking it bought no measurable latency**, which is not what 14.6a
+    expected. Median batch latency after the change is 25.6 s against 23.2 s
+    measured before it, both at ``effort=low``; the run's speed came from
+    dispatching batches concurrently, not from a smaller response. The
+    numbers are not perfectly comparable — one batch in isolation against a
+    median of 42 under concurrent load — but they do not support "a smaller
+    payload is faster", so this docstring no longer claims it.
+
+    What the change is worth is the rest of this docstring. Prose can
     only be read one item at a time; an enum can be counted, which is what
     plan §0.1 needs from it: a run that returns little should be able to say
     whether its corpus was off topic, out of scope, or simply mute, rather

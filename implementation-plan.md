@@ -488,6 +488,50 @@ purpose and this sample is valid but smaller", the second says "we tried and cou
 already separates these as `completed_partial` and `completed_degraded`; the counters are what let
 the runner tell them apart.
 
+#### 2.12.3 What the verification run measured
+
+One real run after 14.6a-f, same query as the 2408 s measurement
+(*"Most underrated US states for nature"*), real Serper and real OpenAI.
+
+| | before (§2.12) | after |
+|---|---|---|
+| Whole run | 2408 s | **282.5 s**, `completed_partial` |
+| Comment analysis | 2245.9 s / 50 calls | **147.1 s / 42 calls** |
+| Threads contributing counted opinions | 3 of 81 | **12-13 of 13** |
+| Top result's `discussion_count` | 3 (the ceiling) | **12** |
+| Mentions discarded for an unusable quote | 43 / 2915 = 1.5 % | **2 / 2121 = 0.09 %** |
+
+**The two runs did not see the same corpus** — 81 threads survived triage then, 20 now — because
+discovery is agentic and not deterministic. Structural numbers are comparable; the result *list*
+is not.
+
+**What worked.** 42 analysis calls totalling 1077.8 s of call time finished in 147.1 s of wall
+clock: a 7.3x compression against a ceiling of 8. The admission deadline fired exactly as §2.12.2
+describes — 8 batches refused, 160 comments recorded as budget-limited, none lost to errors, and
+the run landed at `completed_partial` naming its limiting factor. The in-flight tail ran 24.9 s
+past the deadline and the whole run used 42.5 s of the 60 s `tailReserve`. `reason_code` needed no
+`OTHER` in 840 comments, so the closed set covers a real corpus.
+
+**What did not.** Shrinking the analysis response bought no measurable latency (see §5). 14.6a
+stands on countability.
+
+**Three findings this run produced, none of them inside 14.6's scope:**
+
+1. **Retrieval is now the breadth ceiling.** 18 documents survived triage as `polling`; **13 were
+   retrieved**, because `maxComments` fills in *document order* — the same defect §2.12 found in
+   pre-filter, one step earlier. `documents_retrieved` against `documents_polling` makes it
+   visible, so it is not a §0.1 violation, but the sample is still lopsided.
+2. **Discovery is the second-largest cost** at 56.6 s (20 %), fully sequential: 11 model calls and
+   10 searches, none overlapping.
+3. **61 % of extracted mentions are off-granularity** (1284 of 2121) — paid-for output a
+   state-tier question cannot use.
+
+The quote audit trail earned its place immediately. Both rejections were the failure §2.12.1
+describes — one claimed *"Vermont ... is so incredibly beautiful in fall"* where the comment said
+*"new england is so incredibly beautiful in fall"* — and the accepted near-misses were almost all
+**markdown markup** (`*western* virginia`, `[nature reserve]`), which suggests a cheap
+deterministic fold Phase 15 can now justify from data rather than guess at.
+
 ---
 
 ## 3. Architecture
@@ -754,9 +798,13 @@ class CommentAnalysis(BaseModel):
 ```
 
 `reasoning` became `reason_code`, a closed enum: the free-text sentence was 50.2 % of the response
-payload, latency tracks output tokens, and nobody read it. An enum can be *counted*, which is what
-§0.1 wanted from it — a thin run can now say whether its corpus was off topic, out of scope or
-simply mute.
+payload and nobody read it. An enum can be *counted*, which is what §0.1 wanted from it — a thin
+run can now say whether its corpus was off topic, out of scope or simply mute.
+
+**The latency argument for this change did not survive measurement** (§2.12.3). 14.6a was written
+expecting a smaller response to be a faster one; the verification run shows median batch latency of
+25.6 s against 23.2 s before, both at `effort=low`. The change is justified by countability alone,
+and the plan says so rather than leaving a tidier claim standing.
 
 **`normalized_guess` was removed in §2.12, and not for the reason first written here.** Phase 9 did
 consume it, in two places: as a fallback catalogue key when the verbatim surface form missed, and as
