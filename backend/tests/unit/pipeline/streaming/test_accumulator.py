@@ -209,7 +209,10 @@ class TestMaterialThatCannotBeAttributed:
 
 
 class TestARunWithNowhereToSendSnapshots:
-    async def test_no_listener_means_no_snapshot_computed(self) -> None:
+    async def test_a_missing_listener_silences_snapshots_but_keeps_the_corpus(self) -> None:
+        """The accumulator is both the snapshot source and the run's corpus.
+        Skipping the accumulation because nobody wants a snapshot would make
+        a run analyse everything and report nothing."""
         context, _ = _context()
         context.on_partial_results = None
         accumulator = Accumulator(context)
@@ -218,4 +221,6 @@ class TestARunWithNowhereToSendSnapshots:
 
         await accumulator.batch_finished({"c1": _analysis("c1", "Michigan")})
 
-        assert accumulator.corpus() == ([], [])
+        counted, evidence = accumulator.corpus()
+        assert [analysis.comment_id for analysis in counted] == ["c1"]
+        assert evidence == []

@@ -19,15 +19,16 @@ from tripfinder.pipeline.real_pipeline import (
 from tripfinder.settings import Settings
 from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 
+# §4.6 steps 3-7 are one concurrent phase since 14.8 (plan §2.14.2):
+# discovery, triage, retrieval, pre-filtering and analysis overlap inside
+# `parallel_strands` instead of queueing behind each other. Steps 8-11 stay
+# exactly where they were, and still run once, over everything the run
+# gathered.
 _FULL_ORDER = [
     "source_preflight",
     "query_understanding",
-    "agentic_discovery",
-    "document_triage",
-    "content_retrieval",
-    "cheap_prefilter",
+    "parallel_strands",
     "source_health_assessment",
-    "comment_analysis",
     "entity_resolution",
     "user_deduplication",
     "aggregation",

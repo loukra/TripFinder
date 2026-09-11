@@ -26,7 +26,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from tripfinder.ai.errors import LLMProviderError
-from tripfinder.analysis.comment_analysis import CommentAnalysis
 from tripfinder.domain.models import (
     Comment,
     ResearchPlan,
@@ -36,11 +35,16 @@ from tripfinder.domain.models import (
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import SourceHealthRecorder
 from tripfinder.pipeline.selection import best_comments
-from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep, batched
+from tripfinder.pipeline.steps.comment_analysis import (
+    CommentAnalysisStep,
+    _BatchResult,
+    batched,
+)
 from tripfinder.pipeline.steps.prefilter import drop_reason
 from tripfinder.pipeline.steps.retrieval import fetch_comments
 from tripfinder.pipeline.streaming.accumulator import Accumulator
 from tripfinder.pipeline.streaming.budget import CommentClass, RunBudget
+from tripfinder.pipeline.streaming.gate import HealthGate
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,15 @@ class StrandOutcome:
     comments_analysed: int = 0
     batches_attempted: int = 0
     batches_failed: int = 0
+    mentions_fabricated: int = 0
+    """Mentions whose supporting quote was not findable in the comment (§5)."""
+
+    items_discarded: int = 0
+    """Items naming a comment the batch never contained, or naming one twice."""
+
+    comments_unanswered: int = 0
+    """Comments sent for analysis that came back without one."""
+
     failure: str | None = None
 
 
@@ -78,12 +91,23 @@ async def run_strand(
     plan: ResearchPlan,
     comments_per_document: int,
     batch_size: int,
+    gate: HealthGate | None = None,
 ) -> StrandOutcome:
     """Carry one document from its address to counted opinions."""
     try:
-        fetched = await fetch_comments(
-            context, document, recorder=recorder, step_name=STRAND_STEP_NAME
-        )
+        fetched = None
+        if gate is not None:
+            gate.fetch_started()
+        try:
+            fetched = await fetch_comments(
+                context, document, recorder=recorder, step_name=STRAND_STEP_NAME
+            )
+        finally:
+            # Unconditionally, and before anything else can raise: the gate
+            # counts outstanding fetches to decide it will never open, so a
+            # fetch that vanishes without reporting is a hung run.
+            if gate is not None:
+                gate.fetch_finished(ok=fetched is not None)
         if fetched is None:
             # Already recorded as a source failure by ``fetch_comments``.
             return StrandOutcome(document.id, failure="source_fetch_failed")
@@ -104,7 +128,11 @@ async def run_strand(
             return StrandOutcome(document.id, comments_fetched=len(fetched))
 
         accumulator.register(admitted, comment_class=comment_class)
-        analysed, attempted, failed = await _analyse(
+        # §8.1's barrier, kept as a gate: no money is spent on a corpus a
+        # broken source produced (plan §2.14.2).
+        if gate is not None:
+            await gate.wait()
+        tally = await _analyse(
             context,
             admitted,
             budget=budget,
@@ -118,9 +146,12 @@ async def run_strand(
             document_id=document.id,
             comments_fetched=len(fetched),
             comments_admitted=len(admitted),
-            comments_analysed=analysed,
-            batches_attempted=attempted,
-            batches_failed=failed,
+            comments_analysed=tally.analysed,
+            batches_attempted=tally.attempted,
+            batches_failed=tally.failed,
+            mentions_fabricated=tally.fabricated,
+            items_discarded=tally.discarded,
+            comments_unanswered=tally.unanswered,
         )
     except Exception as exc:  # one document must never end a run
         logger.warning("strand %s failed: %s", document.id, exc)
@@ -142,6 +173,18 @@ def _prefilter(context: PipelineContext, comments: Sequence[Comment]) -> list[Co
     return kept
 
 
+@dataclass(frozen=True)
+class _Tally:
+    """What this document's analysis produced, and what it discarded."""
+
+    analysed: int = 0
+    attempted: int = 0
+    failed: int = 0
+    fabricated: int = 0
+    discarded: int = 0
+    unanswered: int = 0
+
+
 async def _analyse(
     context: PipelineContext,
     comments: Sequence[Comment],
@@ -152,9 +195,9 @@ async def _analyse(
     recorder: SourceHealthRecorder,
     plan: ResearchPlan,
     batch_size: int,
-) -> tuple[int, int, int]:
+) -> _Tally:
     """Analyse this document's share, one admitted batch at a time."""
-    analysed = attempted = failed = 0
+    analysed = attempted = failed = fabricated = discarded = unanswered = 0
     for batch in batched(comments, batch_size):
         if not budget.admit_analysis_batch(len(batch)):
             # Budget or deadline. Both are already tallied on the budget,
@@ -168,10 +211,13 @@ async def _analyse(
         if result is None:
             failed += 1
             continue
-        analysed += len(result)
-        if result:
-            await accumulator.batch_finished(result)
-    return analysed, attempted, failed
+        analysed += len(result.analyses)
+        fabricated += result.fabricated
+        discarded += result.discarded
+        unanswered += len(result.unanswered)
+        if result.analyses:
+            await accumulator.batch_finished(result.analyses)
+    return _Tally(analysed, attempted, failed, fabricated, discarded, unanswered)
 
 
 async def _one_call(
@@ -181,7 +227,7 @@ async def _one_call(
     batch: Sequence[Comment],
     *,
     recorder: SourceHealthRecorder,
-) -> dict[str, CommentAnalysis] | None:
+) -> _BatchResult | None:
     """One analysis call. ``None`` means it failed and was recorded (§8.1)."""
     adapter = "llm:comment_analysis"
     try:
@@ -198,4 +244,4 @@ async def _one_call(
         return None
     recorder.record_success(adapter)
     context.research.diagnostics.quote_verifications.extend(result.audit)
-    return result.analyses
+    return result

@@ -67,11 +67,20 @@ class Accumulator:
         self._context.data["comments"] = [comment for _, comment in self._comments.values()]
 
     async def batch_finished(self, analyses: Mapping[str, CommentAnalysis]) -> None:
-        """Add one call's analyses and emit a snapshot of everything so far."""
-        if self._context.on_partial_results is None:
-            return
+        """Add one call's analyses and emit a snapshot of everything so far.
+
+        **Accumulating and emitting are separate.** Under 14.7 this class's
+        ancestor could return early with no listener, because a snapshot
+        nobody receives is wasted work. Under 14.8 this is also the run's
+        corpus — steps 8-11 read what it holds — so skipping the
+        accumulation would produce a run that analysed everything and
+        reported nothing. A missing listener silences the snapshots and
+        nothing else.
+        """
         self._analyses.update(analyses)
         self._batches += 1
+        if self._context.on_partial_results is None:
+            return
 
         if self._computing:
             self._dirty = True

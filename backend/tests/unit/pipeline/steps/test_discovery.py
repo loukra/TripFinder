@@ -36,7 +36,7 @@ from tripfinder.domain.ports import (
 )
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import assess_source_health, get_recorder, terminal_status
-from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
+from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep, discover_documents
 
 THREAD_URL = "https://www.reddit.com/r/travel/comments/{post_id}/a_thread_title/"
 
@@ -364,7 +364,12 @@ class TestAddressesBecomeDocuments:
 
         assert adapter.batches == [["doc1"]]
 
-    async def test_every_collected_id_is_hydrated_in_one_call(self) -> None:
+    async def test_every_collected_id_is_hydrated_exactly_once(self) -> None:
+        """Hydration moved from one call at the end to one per turn (plan
+        §2.14.2), so that a document can be triaged and read while the loop
+        is still searching. What must not change: every id found is
+        hydrated, and none of them twice — a document hydrated twice would
+        be a thread counted twice."""
         search = _CountingSearch()
         adapter = _HydratingAdapter()
         llm = FakeLLMProvider(
@@ -380,7 +385,34 @@ class TestAddressesBecomeDocuments:
 
         await AgenticDiscoveryStep().run(context)
 
-        assert adapter.batches == [["doc1", "doc2", "doc3"]]
+        hydrated = [post_id for batch in adapter.batches for post_id in batch]
+        assert hydrated == ["doc1", "doc2", "doc3"]
+        assert len(hydrated) == len(set(hydrated))
+
+    async def test_documents_are_published_while_the_loop_is_still_searching(self) -> None:
+        """The point of the change: 14.8's orchestrator starts a strand on
+        the first turn's documents rather than on the last turn's."""
+        search = _CountingSearch()
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: _turns("first angle", "second angle", "third angle")}
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            source=adapter,
+            budget=ResearchBudget(max_search_queries=3),
+        )
+
+        published: list[int] = []
+        async for batch in discover_documents(context):
+            published.append(len(search.queries))
+            assert batch
+
+        # The first batch arrived after one search, not after all three.
+        assert published[0] == 1
+        assert len(published) == 3
 
     async def test_nothing_found_means_no_hydrate_call_at_all(self) -> None:
         adapter = _HydratingAdapter()
