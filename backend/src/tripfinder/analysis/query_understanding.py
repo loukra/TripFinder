@@ -18,6 +18,11 @@ DEFAULT_REJECTION_REASON = "This doesn't look like a travel-recommendation quest
 
 CLARIFICATION_QUESTION = "What kind of places are you looking for?"
 
+GLOBAL_SCOPE = GeoScope(type="global", value="Worldwide")
+"""What a query with no named geography resolves to — plan §6 requires every
+confident ``ResearchPlan`` to carry a scope, and "nowhere in particular" is
+itself a real, answerable scope rather than a gap to guess at."""
+
 _GRANULARITY_LABELS: dict[EntityType, str] = {
     EntityType.COUNTRY: "Countries",
     EntityType.REGION: "Regions",
@@ -70,5 +75,9 @@ def build_query_understanding_prompt(query: str) -> str:
         "about. Propose seed search queries and candidate subreddits for "
         "researching it. If it is not a travel-recommendation query, say so "
         "and explain why.\n\n"
+        "If the query names no specific place (no country, region, or other "
+        "area to search within), that is not missing information — set "
+        "scope to {\"type\": \"global\", \"value\": \"Worldwide\"} rather "
+        "than leaving it unset.\n\n"
         f"Query: {query!r}"
     )
