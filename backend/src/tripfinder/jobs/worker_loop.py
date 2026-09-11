@@ -16,6 +16,14 @@ Two things this loop owns beyond queue mechanics:
   every step, not only once at the end — a real run against live adapters
   can take minutes, and without this the API has nothing to report but
   "pending" for the run's entire duration even while it is actively working.
+* **Provisional results** (plan §2.13). ``on_partial_results`` persists each
+  snapshot the analysis step produces, by the same route and for the same
+  reason: minutes of silence with evidence already in hand. Two rules govern
+  it. A snapshot that does not advance the sequence number is refused, so
+  the counts a client reads can never go backwards (§2.13.2); and only
+  ``results``/``weak_results`` are written, never a status, a statistic or a
+  diagnostic — the run's record is always the output of the full step 8-12
+  pass, which lands here moments later by the ordinary route.
 * **The error contract** (plan §0.1, plan §10 Phase 13). ``PipelineRunner``
   already converts an LLM provider failure into a named, ``failed`` research;
   everything else — a bug, a mapping error, anything unexpected — used to
@@ -35,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tripfinder.domain.models import FailureKind, ResearchStatus
 from tripfinder.jobs.repository import JobRepository
 from tripfinder.persistence.repositories import ResearchRepository
-from tripfinder.pipeline.base import ProgressEvent
+from tripfinder.pipeline.base import PartialResults, ProgressEvent
 from tripfinder.pipeline.real_pipeline import (
     build_pipeline_context_for,
     build_pipeline_runner,
@@ -71,8 +79,24 @@ async def run_once(
             return await JobRepository(session).is_cancel_requested(job.id)
 
     context = None
+    last_snapshot_sequence = 0
     try:
-        context = build_pipeline_context_for(research, settings=settings)
+
+        async def _persist_partial(partial: PartialResults) -> None:
+            nonlocal last_snapshot_sequence
+            if partial.batches_completed <= last_snapshot_sequence:
+                # An older snapshot, overtaken on its way here. Writing it
+                # would make the counts on screen go down (plan §2.13.2).
+                return
+            last_snapshot_sequence = partial.batches_completed
+            research.results = partial.results
+            research.weak_results = partial.weak_results
+            async with session_factory() as session:
+                await ResearchRepository(session).save(research)
+
+        context = build_pipeline_context_for(
+            research, settings=settings, on_partial_results=_persist_partial
+        )
         pipeline_context = context
 
         async def _persist_progress(event: ProgressEvent) -> None:

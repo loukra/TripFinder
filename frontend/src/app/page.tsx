@@ -16,6 +16,7 @@ import { ProgressView } from "@/components/ProgressView";
 import { ResultsView } from "@/components/ResultsView";
 import { SearchForm } from "@/components/SearchForm";
 import {
+  RESULTS_AVAILABLE_STATUSES,
   RESULTS_READY_STATUSES,
   STOP_POLLING_STATUSES,
   type ClarificationRequest,
@@ -67,6 +68,21 @@ export default function Home() {
 
   useEffect(() => stopPolling, [stopPolling]);
 
+  // A run that is still analysing already has a ranking worth showing (plan
+  // §2.13), so results are fetched on every tick from that point on, not only
+  // once the run is finished. A provisional fetch is allowed to fail quietly:
+  // the run is mid-flight, the snapshot may not be written yet, and a
+  // cancelled run that never got as far as analysis has no results object at
+  // all — none of which is a reason to tear the page down.
+  const loadResults = useCallback(async (id: string, optional: boolean): Promise<void> => {
+    try {
+      setResults(await getResults(id));
+    } catch (err) {
+      if (optional) return;
+      setError(err instanceof ApiError ? err.message : "could not load these results");
+    }
+  }, []);
+
   // Returns the fetched status so callers can decide whether polling should
   // start at all — a research that already landed on a stop-polling status
   // (e.g. needs_clarification) on its very first fetch must never have an
@@ -85,12 +101,15 @@ export default function Home() {
           clarification: current.clarification,
         });
 
-        if (STOP_POLLING_STATUSES.has(current.status)) {
-          stopPolling();
-          if (RESULTS_READY_STATUSES.has(current.status)) {
-            const resultsBody = await getResults(id);
-            setResults(resultsBody);
-          }
+        if (STOP_POLLING_STATUSES.has(current.status)) stopPolling();
+        if (RESULTS_AVAILABLE_STATUSES.has(current.status)) {
+          await loadResults(id, !RESULTS_READY_STATUSES.has(current.status));
+        } else {
+          // A run that had been showing provisional results and then failed,
+          // or lost its source, has no results object any more (§8.1 rule 1,
+          // §0.1 rule 3). Leaving the last snapshot on screen would let a
+          // broken run keep displaying a ranking as though it had finished.
+          setResults(null);
         }
         return current.status;
       } catch (err) {
@@ -99,7 +118,7 @@ export default function Home() {
         return null;
       }
     },
-    [stopPolling]
+    [loadResults, stopPolling]
   );
 
   function startPolling(id: string) {
@@ -165,6 +184,12 @@ export default function Home() {
         diagnostics: current.diagnostics,
         clarification: current.clarification,
       });
+      // A run cancelled during analysis keeps the evidence it had paid for
+      // (plan §2.13.3); one cancelled earlier has nothing, and says so by
+      // 409, which is why this fetch is optional.
+      if (RESULTS_AVAILABLE_STATUSES.has(current.status)) {
+        await loadResults(run.id, true);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "could not cancel this research");
     } finally {

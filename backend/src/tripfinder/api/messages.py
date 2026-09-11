@@ -13,6 +13,12 @@ it found?* — and every entry answers it differently:
 * ``completed_degraded`` promises nothing about proportions, because the
   sample is not one;
 * ``source_unavailable`` promises nothing at all.
+
+Plan §2.13 adds one more thing a run can be — **provisional** — and it needs
+its own wording for the same reason. A run still analysing has real counts
+from real comments and no denominator yet; a run the user cancelled has
+counts that stopped where they stopped. Neither is a finding about the
+world, and neither may be described in the words a finished run uses.
 """
 
 from __future__ import annotations
@@ -132,14 +138,72 @@ thin-but-honest result never means.
 """
 
 
+PROVISIONAL_STATUSES = frozenset({ResearchStatus.ANALYZING, ResearchStatus.CANCELLED})
+"""The statuses whose results object, if there is one, is unfinished (plan §2.13).
+
+``analyzing`` is the ordinary case: the run is still reading, and the
+corpus is still open. ``cancelled`` is the same corpus frozen where the user
+stopped it — §2.13.3 lets such a run show the evidence it already had rather
+than throw it away, and it is unfinished in exactly the same way.
+"""
+
+
+PROVISIONAL_MESSAGES: dict[ResearchStatus, str] = {
+    ResearchStatus.ANALYZING: (
+        "Still reading. Every count below comes from a comment we have already "
+        "analysed, so none of them is invented — but the reading is not finished, "
+        "the counts can still grow, and no percentage can be worked out until they "
+        "stop."
+    ),
+    ResearchStatus.CANCELLED: (
+        "You stopped this research while it was still reading. What is below is what "
+        "had been counted by then: real, incomplete, and now final only because it was "
+        "interrupted. No percentage can be worked out from a count that never finished."
+    ),
+}
+"""What a provisional results page says about itself (plan §2.13.1, §0.1 rule 4).
+
+Both entries say the same load-bearing thing in their own words — *these
+counts are real and they are not finished* — and neither may be confused
+with ``completed`` ("every discussion we set out to read was read") or with
+``completed_partial`` ("we stopped early on purpose"), which describe runs
+that closed their corpus and computed a denominator from it.
+"""
+
+
 def status_message(status: ResearchStatus) -> str:
     """The §7.1 wording for a status."""
     return STATUS_MESSAGES[status]
 
 
+def is_provisional(status: ResearchStatus) -> bool:
+    """Whether a results object at this status is still unfinished (plan §2.13)."""
+    return status in PROVISIONAL_STATUSES
+
+
 def percentages_suppressed(status: ResearchStatus) -> bool:
-    """§8.1 rule 2: a degraded run's denominator is not a sample, so no shares."""
-    return status is ResearchStatus.COMPLETED_DEGRADED
+    """No shares where the denominator is not a closed sample.
+
+    Two cases, one rule. §8.1 rule 2: a degraded run's denominator is not a
+    sample of anything, because which requests succeeded decided who is in
+    it. Plan §2.13.1: a provisional run's denominator is not closed yet, so
+    §4.4's label — *"X% of people who answered mentioned this"* — has no
+    truth value, since "people who answered" is still growing.
+    """
+    return status is ResearchStatus.COMPLETED_DEGRADED or is_provisional(status)
+
+
+def results_message(status: ResearchStatus) -> str:
+    """The wording for a *results page* at this status (plan §2.13).
+
+    Separate from :func:`research_message` because the two answer different
+    questions. While a run is analysing, the status endpoint is asked *what
+    is happening* — "reading between the lines, one comment at a time" — and
+    the results endpoint is asked *what do these numbers mean*, which
+    ``PROGRESS_FLAVOR`` has no answer to.
+    """
+    provisional = PROVISIONAL_MESSAGES.get(status)
+    return provisional if provisional is not None else status_message(status)
 
 
 def research_message(status: ResearchStatus, failure: ResearchFailure | None = None) -> str:

@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResultsView } from "./ResultsView";
 import * as api from "@/lib/api";
-import type { ResearchResultsResponse } from "@/lib/types";
+import type { ResearchResultsResponse, ResultItem } from "@/lib/types";
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof api>("@/lib/api");
@@ -16,6 +16,8 @@ function makeData(overrides: Partial<ResearchResultsResponse> = {}): ResearchRes
     status: "completed",
     message: "Finished.",
     percentages_suppressed: false,
+    provisional: false,
+    weak_results: [],
     results: [
       {
         entity_id: "state:alaska",
@@ -123,3 +125,158 @@ describe("ResultsView", () => {
     expect(screen.getByText("low confidence")).toBeInTheDocument();
   });
 });
+
+function makeResult(overrides: Partial<ResultItem> = {}): ResultItem {
+  return {
+    entity_id: "state:vermont",
+    entity_name: "Vermont",
+    supporter_count: 2,
+    share: null,
+    respondent_pool_size: 9,
+    discussion_count: 3,
+    weighted_score: 1.8,
+    confidence: 0.7,
+    explanation: null,
+    evidence_permalinks: [],
+    ...overrides,
+  };
+}
+
+function makeProvisional(
+  overrides: Partial<ResearchResultsResponse> = {}
+): ResearchResultsResponse {
+  return makeData({
+    status: "analyzing",
+    message: "Still reading.",
+    percentages_suppressed: true,
+    provisional: true,
+    results: [],
+    weak_results: [
+      makeResult(),
+      makeResult({ entity_id: "state:maine", entity_name: "Maine", supporter_count: 1 }),
+    ],
+    ...overrides,
+  });
+}
+
+// Plan §2.13: an unfinished ranking, shown honestly.
+describe("ResultsView, while a run is still counting", () => {
+  it("says the numbers are still growing", () => {
+    render(<ResultsView researchId="r1" data={makeProvisional()} />);
+
+    expect(screen.getByText(/still counting/i)).toBeInTheDocument();
+  });
+
+  it("shows the weak list as candidates rather than an empty ranking", () => {
+    render(<ResultsView researchId="r1" data={makeProvisional()} />);
+
+    expect(screen.getByRole("heading", { name: /candidates so far/i })).toBeInTheDocument();
+    expect(screen.getByText("Vermont")).toBeInTheDocument();
+    expect(screen.getByText("Maine")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no entities gathered enough independent supporters/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("never pads the strong list to reach five", () => {
+    render(<ResultsView researchId="r1" data={makeProvisional()} />);
+
+    // Everything on the page is under the threshold, and the page says so
+    // instead of promoting anything into the headline list.
+    expect(screen.queryByRole("heading", { name: /ahead so far/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/fewer than five different people/i)).toBeInTheDocument();
+  });
+
+  it("reads as not-yet-computable rather than as a defect", () => {
+    render(<ResultsView researchId="r1" data={makeProvisional()} />);
+
+    expect(screen.getAllByText(/no percentage yet/i).length).toBe(2);
+    expect(screen.queryByText(/Percentage withheld\./)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Percentages are withheld for this run/)).not.toBeInTheDocument();
+  });
+
+  it("shows no rank badge while the order can still change", () => {
+    const data = makeProvisional({
+      results: [makeResult({ entity_id: "state:alaska", entity_name: "Alaska", supporter_count: 6 })],
+    });
+
+    render(<ResultsView researchId="r1" data={data} />);
+
+    expect(screen.getByRole("heading", { name: /ahead so far/i })).toBeInTheDocument();
+    expect(screen.queryByText("#1")).not.toBeInTheDocument();
+  });
+
+  it("says nothing has been counted yet when nothing has", () => {
+    const data = makeProvisional({ results: [], weak_results: [] });
+
+    render(<ResultsView researchId="r1" data={data} />);
+
+    expect(screen.getByText(/nothing counted yet/i)).toBeInTheDocument();
+  });
+
+  it("holds a reorder while a row is being read, and applies it afterwards", async () => {
+    const user = userEvent.setup();
+    const vermont = makeResult({ supporter_count: 2 });
+    const maine = makeResult({
+      entity_id: "state:maine",
+      entity_name: "Maine",
+      supporter_count: 1,
+    });
+    const { rerender } = render(
+      <ResultsView researchId="r1" data={makeProvisional({ weak_results: [vermont, maine] })} />
+    );
+
+    await user.hover(screen.getByText("Vermont").closest("li")!);
+    // A new snapshot arrives with Maine ahead — the reader is mid-row, so the
+    // list must not move under them yet.
+    const reordered = makeProvisional({
+      weak_results: [{ ...maine, supporter_count: 9 }, vermont],
+    });
+    rerender(<ResultsView researchId="r1" data={reordered} />);
+
+    expect(namesInOrder()).toEqual(["Vermont", "Maine"]);
+
+    await user.unhover(screen.getByText("Vermont").closest("li")!);
+    rerender(<ResultsView researchId="r1" data={reordered} />);
+
+    expect(namesInOrder()).toEqual(["Maine", "Vermont"]);
+  });
+
+  it("holds a reorder while an evidence panel is open, even after the mouse leaves", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getEvidence).mockResolvedValue({
+      entity_id: "state:vermont",
+      entity_name: "Vermont",
+      total: 0,
+      limit: 10,
+      offset: 0,
+      permalinks: [],
+    });
+    const vermont = makeResult({ supporter_count: 2 });
+    const maine = makeResult({
+      entity_id: "state:maine",
+      entity_name: "Maine",
+      supporter_count: 1,
+    });
+    const { rerender } = render(
+      <ResultsView researchId="r1" data={makeProvisional({ weak_results: [vermont, maine] })} />
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "View evidence" })[0]);
+    await user.unhover(screen.getByText("Vermont").closest("li")!);
+    rerender(
+      <ResultsView
+        researchId="r1"
+        data={makeProvisional({ weak_results: [{ ...maine, supporter_count: 9 }, vermont] })}
+      />
+    );
+
+    expect(namesInOrder()).toEqual(["Vermont", "Maine"]);
+  });
+});
+
+function namesInOrder(): string[] {
+  return screen
+    .getAllByRole("heading", { level: 3 })
+    .map((heading) => heading.textContent ?? "");
+}

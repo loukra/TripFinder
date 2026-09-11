@@ -534,6 +534,128 @@ deterministic fold Phase 15 can now justify from data rather than guess at.
 
 ---
 
+### 2.13 A run reports once, after five minutes of silence — **Phase 14.7 added**
+
+The verification run in §2.12.3 finished in 282.5 s and reported **once**, at the end. Everything
+before that is a status line and a spinner. This is not the speed defect §2.12 fixed — a sixty-second
+run would still report once, at the end — it is the reporting model: nothing downstream of analysis
+runs until analysis is finished, so nothing can be shown until analysis is finished.
+
+The lever is that steps 8-11 — entity resolution, deduplication, aggregation, ranking — are cheap and
+almost entirely deterministic. Re-running them over the comments analysed *so far*, on a throwaway
+copy of the context, produces a real ranking from real evidence for a fraction of a second's work and
+**zero model calls**. That is a *snapshot*, and Phase 14.7 emits one after every analysis batch.
+
+#### 2.13.1 What a provisional answer may claim
+
+Two rules, both arithmetic rather than taste.
+
+**Counts are safe; percentages are not.** The respondent pool `P` (§4.1) is the denominator, and it
+grows as more comments are analysed:
+
+| Quantity | Can it go down as analysis continues? |
+|---|---|
+| `supporterCount(e)`, `weightedScore(e)`, the respondent pool `P` | **No** — they only grow |
+| `share(e)` — the count divided by that pool | **Yes** |
+| rank order | **Yes** |
+
+A count shown at 60 s is still true at 290 s — incomplete, not wrong. A share shown at 60 s can be
+flatly contradicted later, because the denominator moves under every entity at once. There is a
+second and cleaner reason: §4.4 fixes the wording of that label exactly — *"X% of people who answered
+mentioned this"* — and while analysis is running, "people who answered" is not a closed set. The
+sentence has no truth value yet. **So percentages are withheld until the corpus closes**, by the same
+mechanism §8.1 rule 2 already uses for a degraded run, and for a related reason: in both cases the
+denominator is not a sample of anything.
+
+**Rank order moving is fine.** Under an explicit provisional label a list that reorders is behaving
+as promised; one that held still would imply a stability it does not have. Only the final state is
+persisted as the run's result, so no intermediate ordering can reach it.
+
+**Provisional never means padded.** §4.4's rule holds unchanged: five supporters or it is not a
+strong result, and fewer qualify is fewer shown. After the first wave of batches the strong list is
+often empty, which is why a provisional payload carries the **weak list** too — the honest early
+picture is *candidates so far*, filling before it reorders, not a podium with gaps in it.
+
+#### 2.13.2 Snapshots are ephemeral, and nothing may be derived from them
+
+§2.12 fixed the analysis merge in **batch order, never completion order**, so two runs over one
+corpus produce identical statistics and identical suppressions. Snapshots necessarily arrive in
+completion order. Both are correct, and they cannot be the same thing:
+
+> **Binding rule.** A snapshot is display state. The sequence of snapshots is not reproducible; only
+> the final state is, and only the final state is the record. No statistic, suppression, diagnostic
+> or terminal status may be derived from a snapshot, and a run's persisted result is always the
+> output of the full step 8-12 pass.
+
+Two consequences fall out of it. Aggregation settles the run's terminal status (§7.1), so a snapshot
+must read **only** `results` and `weak_results` off its throwaway copy and discard everything else —
+copying anything more back would have a run announce itself finished sixty seconds in. And entity
+resolution runs in a deterministic-only mode for snapshots: the catalogue and normalisation resolve
+most names for free, an unresolved name is simply not counted, and the snapshot therefore
+*under*-reports rather than over-reports. That is the safe direction, and it costs no model call.
+
+**The counts must never go backwards.** The first wave of batches finishes within seconds of itself;
+naively that is one snapshot computation and one database write per batch, racing each other, and a
+snapshot covering three batches landing after one covering five makes the numbers on screen go *down*
+— breaking the single promise that makes a provisional answer safe to show. Two guards, both
+required: **single-flight with coalescing** (a computation already running marks the state dirty and
+recomputes once afterwards, rather than queueing one per batch) and a **sequence number** counting
+the batches a snapshot covers, so a lower one is never persisted over a higher one. Coalescing also
+sets the update rhythm — roughly one per wave — with no timer to tune.
+
+#### 2.13.3 The API contract
+
+`analyzing` already exists as a status and is already set before analysis begins, so no new status is
+needed. What changes is that it becomes a status with a results object:
+
+- `GET /research/{id}/results` serves `analyzing`, with `provisional: true`;
+- the response carries `weak_results` alongside `results`, each labelled for what it is;
+- `share` is **`null`**, never `0`, and `percentages_suppressed` is true.
+
+That last point is the load-bearing one. §0.1 requires a provisional response to be distinguishable
+from a final one **by a client that ignores the flag** — a screenshot, a cached response or a naive
+consumer must not be able to render an unfinished ranking as a settled one. A null share is a hole a
+naive client cannot fill in; a zero is a number it would print.
+
+A thin provisional run must also stay distinguishable from a thin *suppressed* one (§0.1). It is:
+`provisional` says the corpus is still open, `diagnostics.suppressions` says what was lost, and the
+two appear in the same payload without overlapping.
+
+**§7.1 is amended in one row.** `cancelled` previously promised no results page at all. A run
+cancelled during analysis has now already produced snapshots from evidence the user paid for, and
+throwing them away to show an empty page serves nobody — it is the same waste §2.12.2 refuses when
+it lets in-flight batches finish. So: **a cancelled run serves a results object when, and only when,
+it holds a provisional snapshot**, marked `provisional: true` with percentages withheld and its own
+wording; a cancelled run with no snapshot behaves exactly as before. Every other "No" in §7.1 is
+unchanged — `failed`, `rejected` and `source_unavailable` still have no results object, because in
+those cases there is no evidence, which is a different thing from unfinished evidence.
+
+#### 2.13.4 Explicitly out of scope
+
+- **Anything that makes the pipeline faster.** Step timing, batch size, provider tuning, and the
+  breadth ceiling §2.12.3 found in retrieval are all real and all tracked separately. With 14.7 alone
+  the first snapshot lands when the first analysis wave returns — after discovery, triage and
+  retrieval have run. *That is the feature working correctly*, and it must not be judged as a latency
+  result.
+- **Shrinking the analysis batch to snapshot sooner.** Measured in §2.12: per-call latency is mostly
+  fixed cost, not output size. Smaller batches would produce the first snapshot a few seconds earlier
+  carrying so little evidence that nothing clears §4.4's five-supporter line — so the first *useful*
+  snapshot would arrive later.
+- **Showing anything the model believes.** The quick route to a ranking in ten seconds is to ask the
+  model what it thinks and replace it with evidence later. That is §0.1 in its purest form — a prior
+  wearing the clothes of a finding — in the position that anchors the whole answer. Every provisional
+  number is computed from analysed comments, or it is not shown.
+
+Two follow-ups are understood and deliberately excluded: **showing the evidence as it is gathered**
+(discovery and triage already know which discussions were found and which count, long before any
+ranking exists — it is not a ranking and must not be dressed as one), and **analysing before
+retrieval finishes** (breadth-first fetching would let the first wave go out much earlier). The second
+changes *when* evidence arrives; 14.7 establishes *whether it can be shown at all*, and every rule
+about what a half-finished answer may claim. Reordering first would mean faster evidence and still no
+way to put it on screen.
+
+---
+
 ## 3. Architecture
 
 Unchanged from `PROJECT.md` §4–6: **Modular Monolith + Ports & Adapters + Research Pipeline +
@@ -911,7 +1033,7 @@ any state ──> cancelled          (user)
 | `source_unavailable` | Every adapter failed. There is no evidence at all | **No.** Error state only |
 | `rejected` | Not a travel-recommendation question | No |
 | `failed` | Unexpected internal error | No |
-| `cancelled` | User cancelled | No |
+| `cancelled` | User cancelled | **Only what it already had** — a provisional snapshot, labelled as one (§2.13.3). Nothing at all if it had none |
 
 The distinction between `completed_partial` and `completed_degraded` is the whole point. The first
 says *"we stopped early on purpose"* — `PROJECT.md` §21's graceful stop, and the evidence gathered
@@ -1068,7 +1190,8 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | 14 | Frontend | 13 | Search, clarification, progress, results, evidence drill-down, empty states |
 | **14.5** | **Search-backed discovery** | 6, 14 | **§2.11. `WebSearchProvider` port, fake + Serper impls, `SEARCH_PROVIDER` default fake, Reddit-URL → post-id extraction, batch hydration via `posts/ids`, discovery step rewritten, §8.1 accounting over both dependencies** |
 | **14.6** | **Throughput and sampling breadth** | 14.5 | **§2.12. Enum reason codes replace prose, concurrent analysis batches, configurable `reasoning.effort` (default `low`), per-batch failure isolation, per-thread sampling with comment `score`, `maxResearchDuration` enforced as an admission gate (in-flight work always finishes), fuzzy quote verification + audit trail** |
-| 15 | Evaluation | 14.6 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
+| **14.7** | **Streaming provisional results** | 14.6 | **§2.13. Snapshot function re-running steps 8-11 over the partial corpus with no model call, a snapshot emitted after every analysis batch (single-flight, coalesced, sequence-guarded), `analyzing` served by `/results` as `provisional` with `share: null` and the weak list alongside, a provisional results view that fills before it reorders** |
+| 15 | Evaluation | 14.6, 14.7 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
 
@@ -1154,6 +1277,21 @@ config with a documented default and no model parameter is hard-coded outside it
 verification accepts a normalised ≥0.90 match and records every non-exact decision — accepted and
 rejected — with claimed quote, best-matching span, score and verdict, retrievable for review.
 
+
+**Phase 14.7 — acceptance (§2.13):** a run reports a ranked, non-empty provisional result **before**
+its analysis step completes, marked provisional, with `share` null; a snapshot and a full aggregation
+produce identical output over an identical closed corpus, proven by a test that runs both; a snapshot
+issues **zero** model calls, proven against a counting fake provider; a provisional response whose
+strong list is empty still carries the weak list, and the view renders it as candidates rather than
+as an empty ranking — nothing is ever padded to reach five; a run cancelled during analysis still
+reports the evidence it had, marked provisional, and one cancelled with no snapshot still has no
+results object; a client that ignores `provisional` shows no percentage, because `share` is null and
+not zero; no snapshot is persisted as a run's result and no statistic, suppression or terminal status
+is derived from one, proven by a test that snapshots a context and asserts it is unchanged; §0.1: a
+provisional run that is thin *because it is early* is distinguishable in the payload from one that is
+thin *because evidence was lost*; and the counts a client sees never decrease, proven against
+out-of-order batch completion.
+
 **Phase 15 — benchmarks:** underrated US states for nature; US national parks avoiding crowds;
 underrated European road-trip regions; best regions for cycling and nature. For each: inspect a
 sample of retrieved comments by hand, measure relevance precision, check entity resolution and
@@ -1168,7 +1306,8 @@ deduplication, compare ranking against manually reviewed evidence, record cost a
 POST   /api/research                    -> {id, status}
 GET    /api/research/{id}               -> status, progress, statistics, budget used
 POST   /api/research/{id}/clarify       -> answer a ClarificationRequest, resume
-GET    /api/research/{id}/results       -> ranked results (grouped by tier when applicable)
+GET    /api/research/{id}/results       -> ranked results, strong and weak (§2.13.3: also
+                                           served while `analyzing`, flagged `provisional`)
 GET    /api/research/{id}/evidence      -> evidence for an entity, paginated
 POST   /api/research/{id}/cancel        -> cancel a running research
 ```

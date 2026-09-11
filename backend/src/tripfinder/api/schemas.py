@@ -81,7 +81,25 @@ class ResearchResultsResponse(BaseModel):
     status: ResearchStatus
     message: str
     percentages_suppressed: bool
+    provisional: bool = False
+    """Whether this ranking is still unfinished (plan §2.13).
+
+    A provisional response is also distinguishable **without** reading this
+    flag, and §2.13.3 requires it to be: every ``share`` is ``null`` rather
+    than a number, so a screenshot, a cached response or a client that never
+    heard of this field cannot render an unfinished ranking as a settled
+    one. The flag is what a client that *does* know can label.
+    """
     results: list[ResultItem]
+    """Strong recommendations — `§4.4`'s threshold, capped, never padded."""
+    weak_results: list[ResultItem] = Field(default_factory=list)
+    """Everything ranked below the strong line, in the same order.
+
+    Persisted since Phase 11 and exposed here because a provisional run
+    usually has nothing else to show: nobody clears five supporters in the
+    first wave of batches, and §4.4 forbids padding the strong list to hide
+    that. The honest early picture is "candidates so far" (plan §2.13.1).
+    """
 
 
 class SourceUnavailableError(BaseModel):
@@ -109,9 +127,10 @@ class ResearchNotReadyError(BaseModel):
     """A research that has not yet reached, or will never reach, a results page.
 
     Covers every status besides ``source_unavailable`` and ``failed`` (which
-    have their own richer errors above): still running, ``needs_clarification``,
-    ``rejected``, or ``cancelled`` — plan §7.1's "No" column, minus the two
-    that already name their own cause.
+    have their own richer errors above): still running short of analysis,
+    ``needs_clarification``, ``rejected``, or ``cancelled`` with nothing to
+    show — plan §7.1's "No" column, minus the two that already name their
+    own cause and the two §2.13.3 moved out of it.
     """
 
     status: ResearchStatus

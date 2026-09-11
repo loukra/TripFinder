@@ -68,6 +68,9 @@ this procedure exactly. It is the same every time; only the number changes.
   fail to retrieve evidence records what it suppressed and why, exposes it through the API, and has
   a test proving a suppressed run is distinguishable from a genuinely thin one.
 - **No LLM decides the final ranking.** Steps 9-12 are deterministic (plan §4.6).
+- **Plan §2.13.2** — a provisional snapshot is display state. It is never a run's persisted result,
+  and no statistic, suppression, diagnostic or terminal status may be derived from one. A snapshot
+  is the run's own steps 8-11 over a partial corpus, never a second implementation of the metric.
 - `domain/` and `ranking/` import nothing from `sources/`, `ai/`, `persistence/`, `api/`, or any
   framework. Enforced by a test (plan §3.1).
 - No live LLM or network calls in the normal test suite. Evaluation tests are marked and excluded

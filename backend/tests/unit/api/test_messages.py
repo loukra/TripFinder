@@ -139,12 +139,27 @@ class TestProgressFlavor:
 
 
 class TestPercentageSuppression:
-    def test_only_a_degraded_run_suppresses_percentages(self) -> None:
+    """Two reasons to withhold a share, and no third one.
+
+    §8.1 rule 2: a degraded run's denominator is not a sample. Plan
+    §2.13.1: a provisional run's denominator is not closed yet. Every other
+    status either has a real denominator or has no results object at all.
+    """
+
+    def test_a_degraded_run_and_an_unfinished_one_suppress_percentages(self) -> None:
         suppressing = {
             status for status in ResearchStatus if percentages_suppressed(status)
         }
 
-        assert suppressing == {ResearchStatus.COMPLETED_DEGRADED}
+        assert suppressing == {
+            ResearchStatus.COMPLETED_DEGRADED,
+            ResearchStatus.ANALYZING,
+            ResearchStatus.CANCELLED,
+        }
+
+    def test_a_finished_run_never_suppresses_them(self) -> None:
+        for status in (ResearchStatus.COMPLETED, ResearchStatus.COMPLETED_PARTIAL):
+            assert not percentages_suppressed(status)
 
 
 class TestAFailedRunNamesItsCause:

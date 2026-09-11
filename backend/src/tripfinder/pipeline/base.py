@@ -9,12 +9,13 @@ need, so the context itself never has to know about business concepts
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from tripfinder.domain.models import Research, ResearchStatus
+from tripfinder.domain.models import Research, ResearchStatus, Result
 from tripfinder.domain.ports import LLMProvider, SourceAdapter, WebSearchProvider
 
 
@@ -24,6 +25,31 @@ class ProgressEvent(BaseModel):
     sequence: int
     step_name: str
     status: ResearchStatus
+
+
+@dataclass(frozen=True)
+class PartialResults:
+    """One provisional ranking, computed mid-run (plan §2.13).
+
+    Display state, and nothing else. ``batches_completed`` is how many
+    analysis batches it covers: because batches finish in an order the run
+    does not control, a listener must refuse anything that does not advance
+    it, or the counts on screen can go backwards (§2.13.2) — the one thing
+    that would make a provisional answer unsafe to show.
+    """
+
+    results: list[Result]
+    """Strong recommendations so far — §4.4's threshold, never padded."""
+
+    weak_results: list[Result]
+    """Everything else ranked so far. Early on this is where the evidence is."""
+
+    batches_completed: int
+    comments_analysed: int
+
+
+PartialResultsListener = Callable[[PartialResults], Awaitable[None]]
+"""Called with each new snapshot, in the order they were computed."""
 
 
 @dataclass
@@ -36,6 +62,15 @@ class PipelineContext:
     llm: LLMProvider
     data: dict[str, Any] = field(default_factory=dict)
     progress: list[ProgressEvent] = field(default_factory=list)
+    on_partial_results: PartialResultsListener | None = None
+    """Where provisional rankings go while a run is still analysing (plan §2.13).
+
+    A sibling of ``progress`` rather than something the steps write into the
+    context: a snapshot is not part of the run's record, and giving it a
+    resting place next to the data later steps read would invite exactly the
+    derivation §2.13.2 forbids. Unset — in tests, and in any caller that has
+    nowhere to put a snapshot — the run behaves as it did before.
+    """
 
 
 @runtime_checkable

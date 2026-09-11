@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.domain.models import EntityType, GeoScope, Research, ResearchPlan, ResearchStatus
+from tripfinder.pipeline.base import PartialResults
 from tripfinder.pipeline.real_pipeline import (
     build_pipeline_context_for,
     build_pipeline_runner,
@@ -104,3 +105,24 @@ def test_context_seeds_the_resume_plan_for_a_clarified_research() -> None:
     context = build_pipeline_context_for(research, settings=Settings())
 
     assert context.data["plan"] is research.resume_plan
+
+
+def test_context_carries_the_partial_results_listener_it_was_given() -> None:
+    """Plan §2.13: the analysis step reports snapshots through the context, so
+    a composition root that dropped the listener would leave a run silent for
+    its whole duration with nothing failing to say so."""
+
+    async def listener(partial: PartialResults) -> None:  # pragma: no cover - never called
+        raise AssertionError("not called by construction")
+
+    context = build_pipeline_context_for(
+        _research(), settings=Settings(), on_partial_results=listener
+    )
+
+    assert context.on_partial_results is listener
+
+
+def test_a_context_built_without_one_simply_reports_nothing() -> None:
+    context = build_pipeline_context_for(_research(), settings=Settings())
+
+    assert context.on_partial_results is None

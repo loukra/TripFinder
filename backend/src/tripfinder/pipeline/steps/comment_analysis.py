@@ -21,6 +21,15 @@ quietly treated as a comment with nothing to say. That distinction is plan
 irrelevant produce the same empty contribution to the ranking, and only one
 of them is a finding.
 
+**Provisional results** (plan §2.13). This is also the step a run spends
+most of its time in, so it is where the waiting happens — and each batch
+that comes back is a moment where a new ranking is worth showing. Every
+batch with analyses in it hands them to a snapshot emitter, which ranks
+everything analysed so far and passes it to the context's listener. None of
+that touches the run's own record: the merge below still happens in batch
+order, a snapshot is display state, and §2.13.2 forbids deriving a
+statistic, a suppression or a status from one.
+
 **What this step does *not* do** is filter. Low relevance, an unusable
 stance, an entity outside the scope — all are recorded faithfully and left
 for the deterministic steps that own them: §4.1's relevance threshold and
@@ -38,7 +47,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import NamedTuple
 
@@ -59,9 +68,10 @@ from tripfinder.domain.models import (
     ResearchPlan,
     SuppressionReason,
 )
-from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.base import PartialResults, PipelineContext
 from tripfinder.pipeline.deadline import admission_deadline
 from tripfinder.pipeline.health import get_recorder, reassess_after_analysis
+from tripfinder.pipeline.snapshot import snapshot
 from tripfinder.sources.failures import failure_kind
 
 logger = logging.getLogger(__name__)
@@ -92,6 +102,92 @@ answer with 429s that §8.1 has to account for as lost evidence.
 Phase 15 tunes this against real runs. It is the kind of number that should
 move once there is more than one measurement behind it.
 """
+
+
+class _SnapshotEmitter:
+    """Turns each finished batch into a provisional ranking (plan §2.13).
+
+    Two guards, and the plan calls both of them required.
+
+    **Single-flight with coalescing.** The first wave of batches finishes
+    within a second or two of itself. One snapshot computation and one
+    persistence write per batch would have eight of them racing; instead a
+    computation already in progress marks the state dirty and the emitter
+    recomputes once when it is done. That also sets the update rhythm —
+    roughly one snapshot per wave — with no timer to tune.
+
+    **A sequence number.** ``batches_completed`` counts the batches a
+    snapshot actually covers, so a listener can refuse anything that does
+    not advance it. Without that, a snapshot covering three batches could
+    land after one covering five and the counts on screen would go *down*,
+    breaking the one promise (§2.13.1) that makes a provisional answer safe
+    to show at all.
+
+    Failed and undispatched batches emit nothing: they add no analyses, so
+    the snapshot would be identical to the last one, and at the deadline
+    every remaining batch returns at once.
+    """
+
+    def __init__(
+        self,
+        context: PipelineContext,
+        *,
+        counted: Sequence[Comment],
+        evidence: Sequence[Comment],
+    ) -> None:
+        self._context = context
+        self._counted = list(counted)
+        self._evidence = list(evidence)
+        self._analyses: dict[str, CommentAnalysis] = {}
+        self._batches = 0
+        self._computing = False
+        self._dirty = False
+
+    async def batch_finished(self, analyses: Mapping[str, CommentAnalysis]) -> None:
+        """Accumulate one batch's analyses, and emit a snapshot of everything so far."""
+        listener = self._context.on_partial_results
+        if listener is None:
+            return
+
+        # Every snapshot is cumulative — everything finished so far, never
+        # just the batch that has only now come back.
+        self._analyses.update(analyses)
+        self._batches += 1
+
+        if self._computing:
+            self._dirty = True
+            return
+        self._computing = True
+        try:
+            while True:
+                self._dirty = False
+                await self._emit()
+                if not self._dirty:
+                    return
+        finally:
+            self._computing = False
+
+    async def _emit(self) -> None:
+        listener = self._context.on_partial_results
+        if listener is None:
+            return
+        # Read the accumulator once, before the first await: what this
+        # snapshot covers must not change underneath it.
+        counted = _in_order(self._counted, self._analyses)
+        evidence = _in_order(self._evidence, self._analyses)
+        batches = self._batches
+
+        results, weak_results = await snapshot(
+            self._context, counted_analyses=counted, evidence_analyses=evidence
+        )
+        await listener(
+            PartialResults(
+                results=results,
+                weak_results=weak_results,
+                batches_completed=batches,
+                comments_analysed=len(counted) + len(evidence),
+            )
+        )
 
 
 class _BatchResult(NamedTuple):
@@ -174,7 +270,8 @@ class CommentAnalysisStep:
         # them in: the corpus that decides the ranking is dispatched before
         # the corpus that only illustrates it.
         batches = list(_batched(counted + evidence, self._batch_size))
-        results = await self._analyse_all(context, plan, batches)
+        emitter = _SnapshotEmitter(context, counted=counted, evidence=evidence)
+        results = await self._analyse_all(context, plan, batches, emitter)
 
         # Merged in batch order, never in completion order. Concurrency is
         # about when a call is *made*; two runs over the same corpus still
@@ -232,6 +329,7 @@ class CommentAnalysisStep:
         context: PipelineContext,
         plan: ResearchPlan,
         batches: Sequence[Sequence[Comment]],
+        emitter: _SnapshotEmitter,
     ) -> list[_BatchResult]:
         """Every batch, at most ``max_concurrent_batches`` of them in flight.
 
@@ -252,7 +350,7 @@ class CommentAnalysisStep:
         recorder = get_recorder(context)
         deadline = admission_deadline(context)
 
-        async def analyse_one(index: int, batch: Sequence[Comment]) -> _BatchResult:
+        async def dispatch_one(index: int, batch: Sequence[Comment]) -> _BatchResult:
             async with limit:
                 # The clock is read here, holding the semaphore, because this
                 # is the moment of dispatch — checking it up front would
@@ -298,6 +396,15 @@ class CommentAnalysisStep:
                     )
                 recorder.record_success(ANALYSIS_ADAPTER)
                 return result
+
+        async def analyse_one(index: int, batch: Sequence[Comment]) -> _BatchResult:
+            result = await dispatch_one(index, batch)
+            # Outside the semaphore, deliberately: a snapshot is cheap, but
+            # it is not a model call, and holding a dispatch slot while one
+            # is computed would make the run slower to buy nothing.
+            if result.analyses:
+                await emitter.batch_finished(result.analyses)
+            return result
 
         return list(
             await asyncio.gather(

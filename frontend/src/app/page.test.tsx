@@ -40,6 +40,8 @@ const resultsResponse: ResearchResultsResponse = {
   status: "completed",
   message: "Finished. Every discussion we set out to read was read, so these counts reflect what people actually said.",
   percentages_suppressed: false,
+  provisional: false,
+  weak_results: [],
   results: [
     {
       entity_id: "state:alaska",
@@ -145,6 +147,12 @@ describe("Home page", () => {
     vi.mocked(api.cancelResearch).mockResolvedValue(
       statusResponse({ status: "cancelled", message: "You cancelled this research before it finished." })
     );
+    // Cancelled during discovery, so there is no snapshot to show and the
+    // API says so with a 409 (plan §2.13.3). The page must not treat that as
+    // an error — it is the ordinary shape of an early cancellation.
+    vi.mocked(api.getResults).mockRejectedValue(
+      new api.ApiError(409, { status: "cancelled", message: "no results" })
+    );
 
     render(<Home />);
     await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
@@ -177,5 +185,69 @@ describe("Home page", () => {
     expect(screen.getByLabelText(/what are you trying to find/i)).toBeInTheDocument();
     expect(screen.queryByText("Alaska")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "underrated states" })).not.toBeInTheDocument();
+  });
+});
+
+// Plan §2.13: the page stops waiting five minutes for its first number.
+describe("Home page, while a run is still counting", () => {
+  it("shows a provisional ranking mid-run and keeps polling", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    vi.mocked(api.getResearch).mockResolvedValue(
+      statusResponse({ status: "analyzing", message: "Working out what each comment recommends." })
+    );
+    vi.mocked(api.getResults).mockResolvedValue({
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Still reading.",
+      percentages_suppressed: true,
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], share: null, supporter_count: 6 }],
+    });
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText(/still counting/i)).toBeInTheDocument();
+    expect(screen.getByText("Alaska")).toBeInTheDocument();
+    expect(screen.queryByText(/% of people who answered/)).not.toBeInTheDocument();
+    // The progress view stays: the run is still working, and the ranking
+    // below it is not a finished answer.
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("drops the provisional ranking if the run then fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    vi.mocked(api.getResearch)
+      .mockResolvedValueOnce(statusResponse({ status: "analyzing", message: "Analysing." }))
+      .mockResolvedValue(
+        statusResponse({
+          status: "failed",
+          message: "Something went wrong inside this research. Nothing was produced.",
+        })
+      );
+    vi.mocked(api.getResults).mockResolvedValue({
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Still reading.",
+      percentages_suppressed: true,
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], share: null }],
+    });
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/what are you trying to find/i), "underrated states");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText(/still counting/i)).toBeInTheDocument();
+    // A failed run has no results object at all (§8.1 rule 1, §0.1 rule 3):
+    // leaving the last snapshot on screen would let it keep displaying a
+    // ranking as though it had finished one.
+    expect(
+      await screen.findByText("Something went wrong inside this research. Nothing was produced.")
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Alaska")).not.toBeInTheDocument());
   });
 });

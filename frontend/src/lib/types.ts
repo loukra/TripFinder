@@ -39,6 +39,21 @@ export const RESULTS_READY_STATUSES: ReadonlySet<ResearchStatus> = new Set([
   "completed_degraded",
 ]);
 
+// Statuses whose results object is unfinished (plan §2.13.3). `analyzing` is a
+// run still reading; `cancelled` is the same corpus frozen where the user
+// stopped it, and serves a results object only if it got far enough to have
+// one — so a fetch for either may legitimately come back 409 and must not be
+// treated as an error.
+export const PROVISIONAL_STATUSES: ReadonlySet<ResearchStatus> = new Set([
+  "analyzing",
+  "cancelled",
+]);
+
+export const RESULTS_AVAILABLE_STATUSES: ReadonlySet<ResearchStatus> = new Set([
+  ...RESULTS_READY_STATUSES,
+  ...PROVISIONAL_STATUSES,
+]);
+
 export const CANCELLABLE_STATUSES: ReadonlySet<ResearchStatus> = new Set([
   "pending",
   "understanding",
@@ -141,7 +156,15 @@ export interface ResearchResultsResponse {
   status: ResearchStatus;
   message: string;
   percentages_suppressed: boolean;
+  // Whether this ranking is still growing (plan §2.13). A provisional
+  // response is also recognisable without this flag — every `share` is null —
+  // which is the point: a client that ignores it cannot show a percentage.
+  provisional: boolean;
   results: ResultItem[];
+  // Everything ranked below the strong line. Early in a run this is where all
+  // the evidence is, because nobody has five supporters yet and §4.4 forbids
+  // padding the strong list to hide that.
+  weak_results: ResultItem[];
 }
 
 export interface EvidenceResponse {
