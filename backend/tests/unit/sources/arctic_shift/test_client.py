@@ -99,7 +99,7 @@ async def test_get_retries_on_the_slow_down_422_then_succeeds(
             return httpx.Response(
                 422, json={"data": None, "error": "Timeout. Maybe slow down a bit"}
             )
-        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+        return httpx.Response(200, json=load_fixture("posts_ids_batch.json"))
 
     client = _client(handler, fast_config)
 
