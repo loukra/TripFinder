@@ -656,8 +656,9 @@ fieldset {
   padding: 12px 18px;
   border-radius: 20px;
   font-size: 13px;
+  line-height: 1.5;
   background: var(--color-accent-2-100);
-  color: var(--color-text);
+  color: var(--color-accent-2-900);
   margin-bottom: 18px;
 }
 
@@ -669,6 +670,22 @@ fieldset {
   background: var(--color-accent-100);
   color: var(--color-accent-800);
   margin-bottom: 18px;
+}
+
+/* Anything that paints its own background has to bring its own foreground
+   for both themes, or it inherits a light-on-light — which is how the
+   provisional banner became unreadable on a dark ground. */
+@media (prefers-color-scheme: dark) {
+  .banner-provisional {
+    background: var(--color-accent-2-900);
+    color: var(--color-accent-2-200);
+  }
+
+  .banner-degraded,
+  .error {
+    background: color-mix(in srgb, var(--color-accent-800) 55%, #1f1a15);
+    color: var(--color-accent-100);
+  }
 }
 
 .terminal-state {
@@ -729,8 +746,18 @@ fieldset {
   gap: 18px;
 }
 
+.run-main {
+  min-width: 0;
+}
+
 .run-main > .section {
   margin-top: 0;
+}
+
+/* The ranking keeps a reading measure of its own; the column may be wider
+   than this, the rows may not. */
+.run-main > * {
+  max-width: 820px;
 }
 
 .run-side-heading {
@@ -1002,6 +1029,8 @@ fieldset {
 .empty-state {
   margin-top: 10px;
   max-width: 60ch;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 /* — evidence — */

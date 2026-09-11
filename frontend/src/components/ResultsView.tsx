@@ -86,12 +86,19 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
   if (results.length === 0 && candidates.length === 0) {
     return (
       <section className="section" aria-label="Results">
-        <p>{message}</p>
-        <p className="text-muted empty-state">
-          {provisional
-            ? "Nothing counted yet. The first comments are still being read — anything that appears here will be something somebody actually wrote."
-            : "No entities gathered enough independent supporters to be reported as a strong recommendation this time."}
-        </p>
+        {provisional && (
+          <p className="banner banner-provisional">
+            <strong>Provisional result</strong> — still counting.
+          </p>
+        )}
+        <div className="panel">
+          <p>{message}</p>
+          <p className="text-muted empty-state">
+            {provisional
+              ? "Nothing counted yet. The first comments are still being read — anything that appears here will be something somebody actually wrote."
+              : "No entities gathered enough independent supporters to be reported as a strong recommendation this time."}
+          </p>
+        </div>
       </section>
     );
   }

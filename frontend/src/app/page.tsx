@@ -298,11 +298,15 @@ export default function Home() {
 
                 {isRunning && !showResults && !awaitingClarification && (
                   <section className="section" aria-label="Results">
-                    <p className="banner banner-provisional">Provisional result — still counting.</p>
-                    <p className="text-muted empty-state">
-                      Nothing counted yet. The first comments are still being read — anything that
-                      appears here will be something somebody actually wrote.
+                    <p className="banner banner-provisional">
+                      <strong>Provisional result</strong> — still counting.
                     </p>
+                    <div className="panel">
+                      <p className="text-muted empty-state">
+                        Nothing counted yet. The first comments are still being read — anything that
+                        appears here will be something somebody actually wrote.
+                      </p>
+                    </div>
                   </section>
                 )}
 
