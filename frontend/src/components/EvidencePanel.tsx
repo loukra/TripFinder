@@ -58,21 +58,23 @@ export function EvidencePanel({ researchId, entityId, entityName }: EvidencePane
   const hasMore = hasLoaded && offset < (total ?? 0);
 
   return (
-    <div className="evidence-panel" aria-label={`Evidence for ${entityName}`}>
-      {loading && permalinks.length === 0 && <p>Loading…</p>}
+    <div className="evidence-panel rise" aria-label={`Evidence for ${entityName}`}>
+      {loading && permalinks.length === 0 && <p className="text-muted evidence-count">Loading…</p>}
 
       {error && <p className="error">{error}</p>}
 
       {hasLoaded && (
         <>
           {total === 0 ? (
-            <p>No evidence links were retained for this entity.</p>
+            <p className="text-muted evidence-count">
+              No evidence links were retained for this entity.
+            </p>
           ) : (
             <>
-              <p>
-                {total} discussion{total === 1 ? "" : "s"} cited as evidence:
+              <p className="text-muted evidence-count">
+                {total} discussion{total === 1 ? "" : "s"} cited as evidence
               </p>
-              <ul>
+              <ul className="evidence-list">
                 {permalinks.map((link) => (
                   <li key={link}>
                     <a href={link} target="_blank" rel="noopener noreferrer">
@@ -85,7 +87,12 @@ export function EvidencePanel({ researchId, entityId, entityName }: EvidencePane
           )}
 
           {hasMore && (
-            <button type="button" onClick={handleLoadMore} disabled={loading}>
+            <button
+              type="button"
+              className="btn btn-secondary evidence-more"
+              onClick={handleLoadMore}
+              disabled={loading}
+            >
               {loading ? "Loading…" : "Load more"}
             </button>
           )}
