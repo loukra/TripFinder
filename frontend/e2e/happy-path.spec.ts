@@ -55,6 +55,7 @@ test("search a query and drill into evidence for the top result", async ({ page 
         percentages_suppressed: false,
         provisional: false,
         weak_results: [],
+        minimum_independent_users: 5,
         results: [
           {
             entity_id: "state:alaska",
@@ -148,6 +149,7 @@ test("shows a provisional ranking while counting, then the finished one", async 
           : "Finished. Every discussion we set out to read was read, so these counts reflect what people actually said.",
         percentages_suppressed: provisional,
         provisional,
+        minimum_independent_users: 5,
         results: provisional
           ? []
           : [
@@ -190,7 +192,7 @@ test("shows a provisional ranking while counting, then the finished one", async 
 
   // Mid-run: counts, no percentage, and the list labelled for what it is.
   await expect(page.getByText(/still counting/i)).toBeVisible();
-  await expect(page.getByRole("heading", { name: /candidates so far/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /not enough people yet/i })).toBeVisible();
   await expect(page.getByText(/no percentage yet/i)).toBeVisible();
   await expect(page.getByText(/% of people who answered/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();

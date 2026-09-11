@@ -244,6 +244,9 @@ async def get_research_results(
             ResultItem.from_domain(result, suppress_share=suppress_share)
             for result in research.weak_results
         ],
+        minimum_independent_users=(
+            research.research_config.ranking.minimum_independent_users
+        ),
     )
 
 

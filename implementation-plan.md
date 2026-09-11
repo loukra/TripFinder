@@ -576,6 +576,22 @@ strong result, and fewer qualify is fewer shown. After the first wave of batches
 often empty, which is why a provisional payload carries the **weak list** too — the honest early
 picture is *candidates so far*, filling before it reorders, not a podium with gaps in it.
 
+**The weak list holds two different things, and they must not share a label.** §4.4 both sets a
+threshold (five independent users) *and* caps the headline list at five results, so `weak_results`
+contains entities that are not yet a recommendation **and** entities with many supporters that
+merely lost a seat to the cap — in the first real run, Arkansas at 28 supporters sat one place below
+a top five that started at 56. Describing those as "fewer than five people recommended this" states
+something false about a real count, which is §0.1's failure mode in miniature: a presentational
+claim the evidence does not support. The results response therefore carries
+`minimum_independent_users`, and the view labels the two groups separately — *also ranked* and *not
+enough people yet*.
+
+**The denominator is a fact about the run, not about a row.** `respondent_pool_size` is identical on
+every result, so while percentages are withheld and there is no share for it to explain, it is
+stated once for the page rather than repeated beside each entity's own supporter count, where the
+two numbers read as one. The row keeps what is genuinely its own: how many discussions its
+supporters came from.
+
 #### 2.13.2 Snapshots are ephemeral, and nothing may be derived from them
 
 §2.12 fixed the analysis merge in **batch order, never completion order**, so two runs over one
@@ -609,7 +625,8 @@ sets the update rhythm — roughly one per wave — with no timer to tune.
 needed. What changes is that it becomes a status with a results object:
 
 - `GET /research/{id}/results` serves `analyzing`, with `provisional: true`;
-- the response carries `weak_results` alongside `results`, each labelled for what it is;
+- the response carries `weak_results` alongside `results`, each labelled for what it is, plus
+  `minimum_independent_users` so a client can say *why* an entity is in the weak list;
 - `share` is **`null`**, never `0`, and `percentages_suppressed` is true.
 
 That last point is the load-bearing one. §0.1 requires a provisional response to be distinguishable
@@ -1283,7 +1300,8 @@ its analysis step completes, marked provisional, with `share` null; a snapshot a
 produce identical output over an identical closed corpus, proven by a test that runs both; a snapshot
 issues **zero** model calls, proven against a counting fake provider; a provisional response whose
 strong list is empty still carries the weak list, and the view renders it as candidates rather than
-as an empty ranking — nothing is ever padded to reach five; a run cancelled during analysis still
+as an empty ranking — nothing is ever padded to reach five, and an entity that missed only §4.4's
+cap of five headline slots is never described as having too few supporters; a run cancelled during analysis still
 reports the evidence it had, marked provisional, and one cancelled with no snapshot still has no
 results object; a client that ignores `provisional` shows no percentage, because `share` is null and
 not zero; no snapshot is persisted as a run's result and no statistic, suppression or terminal status

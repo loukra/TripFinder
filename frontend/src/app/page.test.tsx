@@ -42,6 +42,7 @@ const resultsResponse: ResearchResultsResponse = {
   percentages_suppressed: false,
   provisional: false,
   weak_results: [],
+  minimum_independent_users: 5,
   results: [
     {
       entity_id: "state:alaska",

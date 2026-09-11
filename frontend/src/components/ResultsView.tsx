@@ -51,12 +51,27 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
   const shown = hold.frozen ?? data;
   const { results, weak_results: weakResults, message, provisional } = shown;
   const percentagesSuppressed = shown.percentages_suppressed;
+  const threshold = shown.minimum_independent_users;
 
   // While a run is provisional the weak list is shown alongside the strong
   // one: after the first batches nobody has cleared §4.4's five supporters,
   // and padding the strong list to fill the page is exactly what §4.4
   // forbids. A finished run keeps the headline list it always had.
   const candidates = provisional ? weakResults : [];
+
+  // Two different reasons an entity is not in the headline list, and they
+  // say opposite things about it: one has too few independent people to
+  // count yet, the other has plenty and merely lost a seat to §4.4's cap of
+  // five. Labelling the second as the first states something false about a
+  // real count — which is the whole §0.1 failure mode, in miniature.
+  const belowCap = candidates.filter((result) => result.supporter_count >= threshold);
+  const belowThreshold = candidates.filter((result) => result.supporter_count < threshold);
+
+  // The respondent pool is the same number on every row — it is the run's
+  // denominator, not a fact about any one entity — so while there is no
+  // percentage to explain it, it is stated once for the page instead of
+  // being repeated beside counts it could be mistaken for.
+  const pool = [...results, ...candidates][0]?.respondent_pool_size ?? 0;
 
   if (results.length === 0 && candidates.length === 0) {
     return (
@@ -84,6 +99,7 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
       {provisional && (
         <p className="banner banner-provisional">
           Still counting — these numbers can only grow.
+          {pool > 0 && ` ${pool} people have given an opinion we can count so far.`}
         </p>
       )}
 
@@ -116,29 +132,66 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
         </>
       )}
 
-      {candidates.length > 0 && (
-        <>
-          <h2 className="results-group-heading">Candidates so far</h2>
-          <p className="text-muted results-group-note">
-            Fewer than five different people have recommended each of these yet, so none of them
-            counts as a recommendation. Nothing here is padding out the list above.
-          </p>
-          <ol className="result-list">
-            {candidates.map((result) => (
-              <ResultRow
-                key={result.entity_id}
-                researchId={researchId}
-                result={result}
-                rank={null}
-                provisional
-                maxSupporterCount={maxSupporterCount}
-                onHoldChange={setRowHeld}
-              />
-            ))}
-          </ol>
-        </>
+      {belowCap.length > 0 && (
+        <CandidateGroup
+          researchId={researchId}
+          heading="Also ranked"
+          note={`Enough different people have recommended each of these to count, but the list above shows at most five.`}
+          results={belowCap}
+          maxSupporterCount={maxSupporterCount}
+          onHoldChange={setRowHeld}
+        />
+      )}
+
+      {belowThreshold.length > 0 && (
+        <CandidateGroup
+          researchId={researchId}
+          heading="Not enough people yet"
+          note={`Fewer than ${threshold} different people have recommended each of these so far, so none of them counts as a recommendation yet. Nothing here is padding out the list above.`}
+          results={belowThreshold}
+          maxSupporterCount={maxSupporterCount}
+          onHoldChange={setRowHeld}
+        />
       )}
     </section>
+  );
+}
+
+interface CandidateGroupProps {
+  researchId: string;
+  heading: string;
+  note: string;
+  results: ResultItem[];
+  maxSupporterCount: number;
+  onHoldChange: (key: string, held: boolean) => void;
+}
+
+function CandidateGroup({
+  researchId,
+  heading,
+  note,
+  results,
+  maxSupporterCount,
+  onHoldChange,
+}: CandidateGroupProps) {
+  return (
+    <>
+      <h2 className="results-group-heading">{heading}</h2>
+      <p className="text-muted results-group-note">{note}</p>
+      <ol className="result-list">
+        {results.map((result) => (
+          <ResultRow
+            key={result.entity_id}
+            researchId={researchId}
+            result={result}
+            rank={null}
+            provisional
+            maxSupporterCount={maxSupporterCount}
+            onHoldChange={onHoldChange}
+          />
+        ))}
+      </ol>
+    </>
   );
 }
 
@@ -217,9 +270,20 @@ function ResultRow({
 
           <div className="result-meta">
             <p className="text-muted result-denominator">
-              Based on {result.respondent_pool_size} people across {result.discussion_count} discussion
-              {result.discussion_count === 1 ? "" : "s"}
-              {provisional ? " so far." : "."}
+              {provisional ? (
+                // The pool is stated once for the page, above: repeating it
+                // here, beside a count of this entity's own supporters,
+                // invites reading one as the other.
+                <>
+                  Recommended in {result.discussion_count} discussion
+                  {result.discussion_count === 1 ? "" : "s"} so far.
+                </>
+              ) : (
+                <>
+                  Based on {result.respondent_pool_size} people across {result.discussion_count}{" "}
+                  discussion{result.discussion_count === 1 ? "" : "s"}.
+                </>
+              )}
             </p>
             <button
               type="button"

@@ -93,12 +93,26 @@ class ResearchResultsResponse(BaseModel):
     results: list[ResultItem]
     """Strong recommendations — `§4.4`'s threshold, capped, never padded."""
     weak_results: list[ResultItem] = Field(default_factory=list)
-    """Everything ranked below the strong line, in the same order.
+    """Everything ranked below the headline list, in the same order.
 
     Persisted since Phase 11 and exposed here because a provisional run
     usually has nothing else to show: nobody clears five supporters in the
     first wave of batches, and §4.4 forbids padding the strong list to hide
     that. The honest early picture is "candidates so far" (plan §2.13.1).
+
+    Two different situations land here, and a reader must be able to tell
+    them apart: an entity **below** ``minimum_independent_users``, which is
+    not yet a recommendation, and one above it that merely fell outside
+    §4.4's cap of five headline results. Describing the second as though it
+    were the first says something false about a real count — which is why
+    the threshold travels with the response.
+    """
+    minimum_independent_users: int = 0
+    """§4.4's strong-recommendation threshold for this run.
+
+    Config, not a constant (plan §1.1), so the view cannot hard-code it —
+    and without it the view cannot say *why* an entity is in
+    ``weak_results`` without guessing.
     """
 
 

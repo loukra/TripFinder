@@ -111,6 +111,31 @@ class TestARunStillAnalysingReportsWhatItHas:
         assert [item["entity_name"] for item in body["weak_results"]] == ["Vermont", "Maine"]
         assert [item["supporter_count"] for item in body["weak_results"]] == [2, 1]
 
+    async def test_it_carries_the_threshold_that_explains_the_weak_list(
+        self,
+        client: TestClient,
+        session_factory: async_sessionmaker[AsyncSession],
+        make_research: Callable[..., Research],
+    ) -> None:
+        """§4.4 puts two different things in ``weak_results``: entities below
+        ``minimum_independent_users``, and entities above it that lost a seat
+        to the cap of five. Without the threshold a client cannot tell them
+        apart, and calling the second kind "too few people" says something
+        false about a real count."""
+        research = await _analysing(
+            session_factory,
+            make_research,
+            strong=[_result("Alaska", 56, pool=417)],
+            weak=[_result("Arkansas", 28, pool=417), _result("Maine", 1, pool=417)],
+        )
+
+        body = client.get(f"/api/research/{research.id}/results").json()
+
+        assert body["minimum_independent_users"] == 5
+        above, below = body["weak_results"]
+        assert above["supporter_count"] >= body["minimum_independent_users"]
+        assert below["supporter_count"] < body["minimum_independent_users"]
+
     async def test_a_run_that_has_not_snapshotted_yet_says_so_honestly(
         self,
         client: TestClient,

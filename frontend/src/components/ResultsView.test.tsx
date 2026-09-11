@@ -18,6 +18,7 @@ function makeData(overrides: Partial<ResearchResultsResponse> = {}): ResearchRes
     percentages_suppressed: false,
     provisional: false,
     weak_results: [],
+    minimum_independent_users: 5,
     results: [
       {
         entity_id: "state:alaska",
@@ -170,7 +171,7 @@ describe("ResultsView, while a run is still counting", () => {
   it("shows the weak list as candidates rather than an empty ranking", () => {
     render(<ResultsView researchId="r1" data={makeProvisional()} />);
 
-    expect(screen.getByRole("heading", { name: /candidates so far/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /not enough people yet/i })).toBeInTheDocument();
     expect(screen.getByText("Vermont")).toBeInTheDocument();
     expect(screen.getByText("Maine")).toBeInTheDocument();
     expect(
@@ -184,7 +185,41 @@ describe("ResultsView, while a run is still counting", () => {
     // Everything on the page is under the threshold, and the page says so
     // instead of promoting anything into the headline list.
     expect(screen.queryByRole("heading", { name: /ahead so far/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/fewer than five different people/i)).toBeInTheDocument();
+    expect(screen.getByText(/fewer than 5 different people/i)).toBeInTheDocument();
+  });
+
+  it("does not claim too few supporters for an entity that merely missed the cap", () => {
+    // §4.4 caps the headline list at five, so an entity with 28 supporters
+    // can sit in weak_results with plenty of people behind it. Describing
+    // that as "fewer than five people" states something false about a real
+    // count.
+    const data = makeProvisional({
+      weak_results: [
+        makeResult({ entity_id: "state:arkansas", entity_name: "Arkansas", supporter_count: 28 }),
+        makeResult({ entity_id: "state:maine", entity_name: "Maine", supporter_count: 1 }),
+      ],
+    });
+
+    render(<ResultsView researchId="r1" data={data} />);
+
+    expect(screen.getByRole("heading", { name: /also ranked/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /not enough people yet/i })).toBeInTheDocument();
+    expect(screen.getByText(/the list above shows at most five/i)).toBeInTheDocument();
+    expect(screen.getByText(/fewer than 5 different people/i)).toBeInTheDocument();
+  });
+
+  it("states the respondent pool once, not beside every count", () => {
+    // "Based on 417 people" repeated under a row whose own count is 28 is
+    // two different scopes in one sentence, and reads as one number.
+    const data = makeProvisional({
+      weak_results: [makeResult({ supporter_count: 3, respondent_pool_size: 417 })],
+    });
+
+    render(<ResultsView researchId="r1" data={data} />);
+
+    expect(screen.getByText(/417 people have given an opinion we can count so far/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Based on 417 people/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Recommended in 3 discussions so far\./)).toBeInTheDocument();
   });
 
   it("reads as not-yet-computable rather than as a defect", () => {

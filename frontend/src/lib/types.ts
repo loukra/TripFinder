@@ -161,10 +161,13 @@ export interface ResearchResultsResponse {
   // which is the point: a client that ignores it cannot show a percentage.
   provisional: boolean;
   results: ResultItem[];
-  // Everything ranked below the strong line. Early in a run this is where all
-  // the evidence is, because nobody has five supporters yet and §4.4 forbids
-  // padding the strong list to hide that.
+  // Everything ranked below the headline list. Early in a run this is where
+  // all the evidence is, because nobody has five supporters yet and §4.4
+  // forbids padding the strong list to hide that. Later it also holds
+  // entities that cleared the threshold and only missed the cap of five —
+  // `minimum_independent_users` is what tells the two apart.
   weak_results: ResultItem[];
+  minimum_independent_users: number;
 }
 
 export interface EvidenceResponse {
