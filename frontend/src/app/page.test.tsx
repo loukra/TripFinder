@@ -14,6 +14,10 @@ vi.mock("@/lib/api", async () => {
     getResults: vi.fn(),
     clarifyResearch: vi.fn(),
     cancelResearch: vi.fn(),
+    // Real polling is 2 s. A test that has to *catch* a transient status
+    // inside that window is a test that depends on how fast the machine is,
+    // which is exactly how this suite went red on CI and stayed green here.
+    getPollIntervalMs: vi.fn(() => 5),
   };
 });
 
@@ -70,10 +74,11 @@ describe("Home page", () => {
   it("runs a search through to a completed results page", async () => {
     const user = userEvent.setup();
     vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
-    vi.mocked(api.getResearch)
-      .mockResolvedValueOnce(statusResponse({ status: "pending" }))
-      .mockResolvedValueOnce(statusResponse({ status: "discovering", message: "Searching." }))
-      .mockResolvedValue(statusResponse({ status: "completed", message: resultsResponse.message }));
+    // The run advances when this test advances it, never on a timer: a
+    // status the page only shows between two polls is one the assertion has
+    // to *catch*, and whether it does depends on how fast the machine is.
+    let current = statusResponse({ status: "pending" });
+    vi.mocked(api.getResearch).mockImplementation(async () => current);
     vi.mocked(api.getResults).mockResolvedValue(resultsResponse);
 
     render(<Home />);
@@ -81,8 +86,11 @@ describe("Home page", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("pending")).toBeInTheDocument();
+
+    current = statusResponse({ status: "discovering", message: "Searching." });
     expect(await screen.findByText("discovering")).toBeInTheDocument();
 
+    current = statusResponse({ status: "completed", message: resultsResponse.message });
     expect(await screen.findByText("Alaska")).toBeInTheDocument();
     expect(screen.getByText(/42% of people who answered mentioned this\./)).toBeInTheDocument();
     expect(api.getResults).toHaveBeenCalledWith("r1");
@@ -221,14 +229,14 @@ describe("Home page, while a run is still counting", () => {
   it("drops the provisional ranking if the run then fails", async () => {
     const user = userEvent.setup();
     vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
-    vi.mocked(api.getResearch)
-      .mockResolvedValueOnce(statusResponse({ status: "analyzing", message: "Analysing." }))
-      .mockResolvedValue(
-        statusResponse({
-          status: "failed",
-          message: "Something went wrong inside this research. Nothing was produced.",
-        })
-      );
+    // The run stays analysing until this test says otherwise, so the
+    // provisional state is observable however many times polling ran.
+    let current = statusResponse({ status: "analyzing", message: "Analysing." });
+    const fails = statusResponse({
+      status: "failed",
+      message: "Something went wrong inside this research. Nothing was produced.",
+    });
+    vi.mocked(api.getResearch).mockImplementation(async () => current);
     vi.mocked(api.getResults).mockResolvedValue({
       ...resultsResponse,
       status: "analyzing",
@@ -243,6 +251,8 @@ describe("Home page, while a run is still counting", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText(/still counting/i)).toBeInTheDocument();
+
+    current = fails;
     // A failed run has no results object at all (§8.1 rule 1, §0.1 rule 3):
     // leaving the last snapshot on screen would let it keep displaying a
     // ranking as though it had finished one.
