@@ -3,6 +3,12 @@
 Adapter responsibilities per plan §8: exponential backoff, 429 handling,
 response validation. Kept separate from ``adapter.py`` so retry/rate-limit
 policy has nothing to do with domain mapping.
+
+Arctic Shift also signals its rate limit as a plain ``422`` with body
+``{"data": null, "error": "Timeout. Maybe slow down a bit"}`` rather than a
+``429`` — indistinguishable from a genuine bad-request 422 by status code
+alone, so it is detected by that body and retried with backoff exactly like
+a 429 instead of being raised immediately as a non-retryable request error.
 """
 
 from __future__ import annotations
@@ -18,6 +24,21 @@ from tripfinder.sources.arctic_shift.errors import (
     ArcticShiftRequestError,
     ArcticShiftUnavailableError,
 )
+
+_SLOW_DOWN_MARKER = "slow down"
+
+
+def _is_rate_limited(response: httpx.Response) -> bool:
+    """True for a 429, or Arctic Shift's own 422-shaped "slow down" signal."""
+    if response.status_code == 429:
+        return True
+    if response.status_code != 422:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return _SLOW_DOWN_MARKER in str(body.get("error", "")).lower()
 
 
 class ArcticShiftClient:
@@ -65,9 +86,11 @@ class ArcticShiftClient:
                 )
                 continue
 
-            if response.status_code == 429:
+            if _is_rate_limited(response):
                 last_error = ArcticShiftUnavailableError(
-                    kind="rate_limited", message="HTTP 429", attempts=attempt + 1
+                    kind="rate_limited",
+                    message=f"HTTP {response.status_code}: {response.text}",
+                    attempts=attempt + 1,
                 )
                 continue
             if response.status_code >= 500:

@@ -87,6 +87,64 @@ async def test_get_raises_unavailable_after_exhausting_retries_on_429(
     assert len(calls) == 3
 
 
+async def test_get_retries_on_the_slow_down_422_then_succeeds(
+    load_fixture: LoadFixture, fast_config: FastConfig
+) -> None:
+    """Arctic Shift's rate limit shows up as a plain 422, not a 429 (plan §8)."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                422, json={"data": None, "error": "Timeout. Maybe slow down a bit"}
+            )
+        return httpx.Response(200, json=load_fixture("posts_search_success.json"))
+
+    client = _client(handler, fast_config)
+
+    body = await client.get("/api/posts/search", params={"query": "nature"})
+
+    assert len(calls) == 2
+    assert len(body["data"]) == 2
+
+
+async def test_get_raises_unavailable_after_exhausting_retries_on_the_slow_down_422(
+    fast_config: FastConfig,
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(422, json={"data": None, "error": "Timeout. Maybe slow down a bit"})
+
+    client = _client(handler, fast_config, max_retries=2)
+
+    with pytest.raises(ArcticShiftUnavailableError) as excinfo:
+        await client.get("/api/posts/search", params={"query": "nature"})
+
+    assert excinfo.value.kind == "rate_limited"
+    assert len(calls) == 3
+
+
+async def test_get_raises_request_error_on_a_422_without_the_slow_down_marker(
+    fast_config: FastConfig,
+) -> None:
+    """A 422 that isn't Arctic Shift's rate-limit shape is a genuine bad request."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(422, json={"data": None, "error": "Unknown query parameter"})
+
+    client = _client(handler, fast_config)
+
+    with pytest.raises(ArcticShiftRequestError):
+        await client.get("/api/posts/search", params={"query": "nature"})
+
+    assert len(calls) == 1
+
+
 async def test_get_raises_request_error_on_400_without_retrying(fast_config: FastConfig) -> None:
     calls: list[httpx.Request] = []
 
