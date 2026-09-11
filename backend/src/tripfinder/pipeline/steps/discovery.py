@@ -24,10 +24,18 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
 
 from tripfinder.analysis.discovery import DiscoveryTurnResponse, build_discovery_prompt
-from tripfinder.domain.models import ResearchPlan, ResearchStatus, SourceDocument
+from tripfinder.domain.models import (
+    ResearchFlag,
+    ResearchPlan,
+    ResearchStatus,
+    SourceDocument,
+    SuppressionReason,
+)
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.deadline import admission_deadline
 from tripfinder.pipeline.health import get_recorder
 from tripfinder.search.tools import RedditThreadSearchTool
 from tripfinder.sources.failures import UNKNOWN_FAILURE_KIND, failure_kind
@@ -95,7 +103,23 @@ async def discover_documents(
     context.data["discovery_post_ids_found"] = post_ids
     context.data["discovery_documents_unhydrated"] = 0
 
+    deadline = admission_deadline(context)
     while len(issued_queries) < budget.max_search_queries:
+        # A document found after the last analysis call may be admitted is a
+        # document nothing will read. Discovery is the run's second-largest
+        # cost (§2.12.3: 56.6 s of 282.5 s), so searching past the point of
+        # usefulness is money spent on evidence that cannot reach the
+        # number. What is already in flight still finishes.
+        if deadline is not None and datetime.now(UTC) > deadline:
+            context.research.diagnostics.record_suppression(
+                step="agentic_discovery",
+                reason=SuppressionReason.BUDGET_MAX_SEARCH_QUERIES,
+                count=budget.max_search_queries - len(issued_queries),
+                detail="searches never issued — the dispatch deadline had passed",
+            )
+            context.research.diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
+            break
+
         turn = await context.llm.complete_structured(
             prompt=build_discovery_prompt(
                 plan, issued_queries=issued_queries, documents_found=len(post_ids)

@@ -672,10 +672,15 @@ class TestTheDeadlineStopsAdmissionNeverCompletion:
             batch_size=1, max_concurrent_batches=1, clock=clock.read
         ).run(context)
 
-        # 300 s budget, 60 s reserve: the window is 240 s, and each call
-        # costs 60 s. One wave is exempt, then four more fit.
-        assert clock.calls == 5
-        assert context.research.statistics["comments_not_analysed_budget"] == len(ALL) - 5
+        # One wave is exempt (§2.12.2 — full cost and no evidence is worse
+        # than a late answer), and each further call costs 60 s of the
+        # window the budget leaves. Derived, so that retuning the budget
+        # changes the number here instead of breaking the claim.
+        budget = context.research.research_config.budget
+        window = budget.max_research_duration_seconds - budget.tail_reserve_seconds
+        expected = 1 + window // 60
+        assert clock.calls == expected
+        assert context.research.statistics["comments_not_analysed_budget"] == len(ALL) - expected
 
     async def test_a_batch_in_flight_when_the_deadline_passes_is_still_kept(self) -> None:
         """Its tokens are already paid for; dropping the answer buys nothing."""
@@ -711,7 +716,7 @@ class TestTheDeadlineStopsAdmissionNeverCompletion:
         assert admission_deadline(context) == START + timedelta(
             seconds=budget.max_research_duration_seconds - budget.tail_reserve_seconds
         )
-        assert budget.tail_reserve_seconds == 60
+        assert budget.tail_reserve_seconds > 0
 
     async def test_undispatched_comments_are_budget_limited_not_failed(self) -> None:
         """Two different claims: "we stopped on purpose" against "we could not see"."""
@@ -743,9 +748,10 @@ class TestTheDeadlineStopsAdmissionNeverCompletion:
             for suppression in context.research.diagnostics.suppressions
             if suppression.reason is SuppressionReason.BUDGET_MAX_RESEARCH_DURATION
         ]
+        budget = context.research.research_config.budget
         assert entry.detail is not None
-        assert "300s budget" in entry.detail
-        assert "60s tail reserve" in entry.detail
+        assert f"{budget.max_research_duration_seconds}s budget" in entry.detail
+        assert f"{budget.tail_reserve_seconds}s tail reserve" in entry.detail
         assert ResearchFlag.BUDGET_LIMIT_REACHED in context.research.diagnostics.flags
 
     async def test_expiry_reaches_the_run_as_completed_partial_never_completed(self) -> None:

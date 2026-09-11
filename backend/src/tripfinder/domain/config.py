@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 class ResearchBudget(BaseModel):
     """Hard limits on how much a single research is allowed to cost (plan §1.1)."""
 
-    max_search_queries: int = Field(default=12, gt=0)
-    max_posts_per_query: int = Field(default=25, gt=0)
-    max_total_posts: int = Field(default=120, gt=0)
-    max_comments: int = Field(default=8000, gt=0)
-    max_comments_per_document: int = Field(default=300, gt=0)
+    max_search_queries: int = Field(default=20, gt=0)
+    max_posts_per_query: int = Field(default=40, gt=0)
+    max_total_posts: int = Field(default=300, gt=0)
+    max_comments: int = Field(default=12000, gt=0)
+    max_comments_per_document: int = Field(default=200, gt=0)
     """How much of one thread the corpus may consist of (plan §2.14.2).
 
     Breadth, not depth. The measured run took comments in document order
@@ -28,7 +28,7 @@ class ResearchBudget(BaseModel):
     yield, from 0.496 respondents per analysed comment to 0.427, because a
     deeper sample of the same threads is mostly the same people again.
 
-    300 x 25 polling threads is why ``max_comments`` is 8000: the cap only
+    200 x 300 documents is why ``max_comments`` is 12000: the cap only
     helps if there is budget left for the threads it frees up.
     """
     topical_quota: float = Field(default=0.15, ge=0.0, le=1.0)
@@ -45,7 +45,7 @@ class ResearchBudget(BaseModel):
     the corpus that decides the ranking. A quota has a floor and a ceiling.
     """
 
-    max_ai_analysis_items: int = Field(default=5000, gt=0)
+    max_ai_analysis_items: int = Field(default=8000, gt=0)
     """The analysis corpus cap (plan §2.14.1).
 
     5000, from the third measurement. The second one is why it is not 3000:
@@ -63,8 +63,22 @@ class ResearchBudget(BaseModel):
     Time is still not what this spends. Two consecutive runs stopped at
     ``budget_limit_reached`` with no batch refused for the deadline.
     """
-    max_research_duration_seconds: int = Field(default=300, gt=0)
-    tail_reserve_seconds: int = Field(default=60, ge=0)
+    max_research_duration_seconds: int = Field(default=180, gt=0)
+    """The promise about the whole research (plan §2.12.2, §2.14.1).
+
+    Lowered from 300 s, and it is now the **binding** limit rather than the
+    one nothing reached. Every other budget above was raised past what three
+    minutes can consume, deliberately: breadth is what the metric wants, and
+    the honest way to buy it is to fan out as wide as the clock allows and
+    then stop. Two measured runs in a row ended at ``budget_limit_reached``
+    with not one batch refused for time, which means the numbers, not the
+    wait, were what held them back.
+
+    A run that stops here is ``completed_partial`` and says so (§7.1). That
+    is the correct description: what was read was read properly, and the
+    corpus is a real but incomplete sample.
+    """
+    tail_reserve_seconds: int = Field(default=40, ge=0)
     """Subtracted from the duration budget to derive the dispatch deadline (plan §2.12.2).
 
     The limit gates what may still be *started*, never what may finish: a

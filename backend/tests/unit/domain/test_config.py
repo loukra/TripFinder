@@ -15,14 +15,15 @@ from tripfinder.domain.config import (
 def test_research_budget_defaults_match_plan() -> None:
     budget = ResearchBudget()
 
-    assert budget.max_search_queries == 12
-    assert budget.max_posts_per_query == 25
-    assert budget.max_total_posts == 120
-    assert budget.max_comments == 8000
-    assert budget.max_comments_per_document == 300
-    assert budget.max_ai_analysis_items == 5000
+    assert budget.max_search_queries == 20
+    assert budget.max_posts_per_query == 40
+    assert budget.max_total_posts == 300
+    assert budget.max_comments == 12000
+    assert budget.max_comments_per_document == 200
+    assert budget.max_ai_analysis_items == 8000
     assert budget.topical_quota == 0.15
-    assert budget.max_research_duration_seconds == 300
+    assert budget.max_research_duration_seconds == 180
+    assert budget.tail_reserve_seconds == 40
     assert budget.max_estimated_cost_usd == 0.50
 
 
