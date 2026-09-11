@@ -22,9 +22,9 @@ of them is a finding.
 **What this step does *not* do** is filter. Low relevance, an unusable
 stance, an entity outside the scope — all are recorded faithfully and left
 for the deterministic steps that own them: §4.1's relevance threshold and
-stance rule when opinions are counted, §9's resolution for the normalized
-guesses here. Dropping evidence early would be a suppression this step has
-no reason to make.
+stance rule when opinions are counted, §4.6 step 8's resolution for the
+surface forms named here. Dropping evidence early would be a suppression
+this step has no reason to make.
 
 The corpus split from §4.5 survives the step: analyses of counted comments
 and analyses of evidence-only comments stay in separate lists, so a topical
@@ -34,7 +34,8 @@ thread's users still cannot reach the respondent pool.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections import Counter
+from collections.abc import Iterable, Iterator, Sequence
 from typing import NamedTuple
 
 from tripfinder.analysis.comment_analysis import (
@@ -43,7 +44,7 @@ from tripfinder.analysis.comment_analysis import (
     EntityMention,
     build_comment_analysis_prompt,
 )
-from tripfinder.domain.models import Comment, ResearchPlan, SuppressionReason
+from tripfinder.domain.models import Comment, ReasonCode, ResearchPlan, SuppressionReason
 from tripfinder.pipeline.base import PipelineContext
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,23 @@ def _in_order(
 ) -> list[CommentAnalysis]:
     """The analyses for ``comments``, in their order, skipping any that are missing."""
     return [analyses[comment.id] for comment in comments if comment.id in analyses]
+
+
+def _reason_code_counts(analyses: Iterable[CommentAnalysis]) -> dict[str, int]:
+    """How many comments each reason code accounts for — every code, including zeros.
+
+    The zeros are the point. A breakdown that lists only what occurred
+    cannot distinguish "no comment was off topic" from "this run never got
+    far enough to find out", and plan §0.1 wants a thin result to name its
+    cause rather than leave the reader to infer one.
+
+    Flat ``analysis_reason_*`` keys rather than one nested mapping, because
+    ``Research.statistics`` is ``dict[str, int]`` all the way to the API and
+    the database, and widening it for one breakdown would be a change to
+    every reader of it.
+    """
+    counts = Counter(analysis.reason_code for analysis in analyses)
+    return {f"analysis_reason_{code.value}": counts[code] for code in ReasonCode}
 
 
 class CommentAnalysisStep:
@@ -115,6 +133,7 @@ class CommentAnalysisStep:
         )
         statistics["analysis_mentions_fabricated_quote"] = fabricated
         statistics["analysis_items_discarded"] = discarded
+        statistics.update(_reason_code_counts(analyses.values()))
         return context
 
     async def _analyse(
@@ -166,7 +185,7 @@ class CommentAnalysisStep:
                 logger.warning(
                     "analysis: discarding a mention of %r in comment %s — "
                     "its supporting quote is not in the comment body",
-                    mention.normalized_guess,
+                    mention.raw_text,
                     comment.id,
                 )
         rejected = len(item.mentions) - len(verified)

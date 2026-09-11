@@ -18,6 +18,7 @@ from tripfinder.domain.models import (
     Comment,
     Entity,
     EntityType,
+    ReasonCode,
     Stance,
 )
 from tripfinder.pipeline.base import PipelineContext
@@ -31,7 +32,6 @@ def mention(
 ) -> EntityMention:
     return EntityMention(
         raw_text=raw,
-        normalized_guess=raw,
         entity_type=EntityType.STATE,
         stance=stance,
         strength=strength,
@@ -61,7 +61,7 @@ def analysis(
         scope_match=True,
         overall_confidence=confidence,
         mentions=[],
-        reasoning="fixture",
+        reason_code=ReasonCode.RECOMMENDS,
     )
 
 

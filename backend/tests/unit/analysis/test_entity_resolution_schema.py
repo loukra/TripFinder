@@ -16,13 +16,11 @@ from tripfinder.domain.models import EntityType
 
 QUESTION = ResolutionQuestion(
     surface_form="the Beaver State",
-    normalized_guess="Beaver State",
     entity_type=EntityType.STATE,
     example_quote="the Beaver State is criminally underrated",
 )
 AMBIGUOUS = ResolutionQuestion(
     surface_form="Springfield",
-    normalized_guess="Springfield",
     entity_type=EntityType.CITY,
     example_quote="Springfield is worth a detour",
     candidates=("Springfield, Oregon", "Springfield, Illinois"),

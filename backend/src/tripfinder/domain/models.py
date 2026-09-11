@@ -39,6 +39,58 @@ class Stance(StrEnum):
     MENTION_ONLY = "mention_only"
 
 
+class ReasonCode(StrEnum):
+    """Why a comment's analysis came out the way it did (plan §5, §2.12).
+
+    Replaces the free-text ``reasoning`` sentence Phase 8 asked for. That
+    sentence was 50.2 % of the analysis response payload, and latency tracks
+    output tokens, so it was also the single most expensive field in the
+    pipeline's most expensive step — for a string no user and no later step
+    ever read.
+
+    A closed set keeps what the sentence was actually good for. Prose can
+    only be read one item at a time; an enum can be counted, which is what
+    plan §0.1 needs from it: a run that returns little should be able to say
+    whether its corpus was off topic, out of scope, or simply mute, rather
+    than leaving "few recommendations" and "we could not see" looking alike.
+
+    ``OTHER`` exists because a forced choice between wrong categories is
+    worse than an honest miss. It is counted like the rest, so a category
+    the corpus needs and this set lacks shows up as a rising number rather
+    than as quietly mislabelled comments (Phase 15 reads it).
+    """
+
+    RECOMMENDS = "recommends"
+    """Names one or more places, in scope, as an answer to the question."""
+
+    RECOMMENDS_OUT_OF_SCOPE = "recommends_out_of_scope"
+    """A real recommendation for somewhere the query did not ask about."""
+
+    CRITERION_MISMATCH = "criterion_mismatch"
+    """On topic and naming places, but not on the criteria — §4.7's downgrade, per comment."""
+
+    ADVISES_AGAINST = "advises_against"
+    """Names places in order to warn about them. Evidence, with a negative stance."""
+
+    MENTION_ONLY = "mention_only"
+    """Names places without judging them — logistics, a correction, an aside."""
+
+    NO_PLACE_NAMED = "no_place_named"
+    """On topic, but recommends nothing nameable: agreement, a joke, a meta-remark."""
+
+    ASKS_A_QUESTION = "asks_a_question"
+    """The commenter is asking, not answering. Common in the threads worth reading."""
+
+    OFF_TOPIC = "off_topic"
+    """Not about the topic at all."""
+
+    UNUSABLE = "unusable"
+    """Too short, not English, or otherwise unreadable (plan §6 drops non-English)."""
+
+    OTHER = "other"
+    """None of the above. Counted, so that a gap in this set is visible."""
+
+
 class ContextType(StrEnum):
     """Whether a SourceDocument is a fair vote or merely topical (plan §4.5)."""
 

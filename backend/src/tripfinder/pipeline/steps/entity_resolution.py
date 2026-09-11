@@ -86,7 +86,6 @@ class _Form:
 
     surface_form: str
     entity_type: EntityType
-    normalized_guess: str
     example_quote: str
     occurrences: int = 0
     candidates: tuple[CatalogEntry, ...] = field(default_factory=tuple)
@@ -190,7 +189,6 @@ class EntityResolutionStep:
                     form = _Form(
                         surface_form=mention.raw_text,
                         entity_type=mention.entity_type,
-                        normalized_guess=mention.normalized_guess,
                         example_quote=mention.supporting_quote,
                     )
                     forms[_key(mention)] = form
@@ -215,9 +213,13 @@ class EntityResolutionStep:
                 confidence=1.0,
             )
 
+        # Only the wording the commenter used is looked up. Phase 8 used to
+        # also send a model-guessed canonical name, and a hit on *that* was
+        # recorded as RULE at confidence 1.0 — a model's judgement wearing a
+        # catalogue's badge, and §2.12.1 showed the model guesses wrong names
+        # confidently. An alias the catalogue does not hold now goes to the
+        # model below, which is where a judgement belongs (§2.12, 14.6a).
         matches = self._catalog.lookup(form.surface_form, plan.entity_granularity)
-        if not matches:
-            matches = self._catalog.lookup(form.normalized_guess, plan.entity_granularity)
         form.candidates = matches
 
         if len(matches) == 1:
@@ -426,7 +428,6 @@ class EntityResolutionStep:
 def _question(form: _Form) -> ResolutionQuestion:
     return ResolutionQuestion(
         surface_form=form.surface_form,
-        normalized_guess=form.normalized_guess,
         entity_type=form.entity_type,
         example_quote=form.example_quote,
         candidates=tuple(entry.canonical_name for entry in form.candidates),

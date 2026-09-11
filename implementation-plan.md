@@ -753,9 +753,26 @@ class CommentAnalysis(BaseModel):
     reason_code: ReasonCode        # closed enum, for debugging — see §2.12
 ```
 
-`normalized_guess` was removed in §2.12: Phase 9 recomputes normalization deterministically and
-never consumed the model's guess. `reasoning` became `reason_code`, a closed enum, for the same
-reason a free-text sentence was worth 50 % of the response payload and was read by nobody.
+`reasoning` became `reason_code`, a closed enum: the free-text sentence was 50.2 % of the response
+payload, latency tracks output tokens, and nobody read it. An enum can be *counted*, which is what
+§0.1 wanted from it — a thin run can now say whether its corpus was off topic, out of scope or
+simply mute.
+
+**`normalized_guess` was removed in §2.12, and not for the reason first written here.** Phase 9 did
+consume it, in two places: as a fallback catalogue key when the verbatim surface form missed, and as
+a `written_as:` hint in the resolution prompt. The first is the reason to remove it. A hit on a
+*guessed* canonical name was recorded as `decided_by=RULE` at `confidence=1.0` — a model's judgement
+wearing a catalogue's badge, in a step §4.6 calls "deterministic first". §2.12.1 established that
+this model guesses wrong names confidently (`Lake Huron` → `Lake Michigan`), so the failure is not
+hypothetical, and it was invisible: the resolution looked like a rule. The path was also untested —
+every fixture set `normalized_guess = raw_text`, which makes the fallback ask the catalogue the same
+question twice.
+
+**The consequence, stated rather than discovered later.** Surface forms the catalogue does not hold
+but whose guess it would have held now go to the AI resolution step instead of resolving by rule.
+`entity_forms_resolved_by_rule` falls and `entity_forms_resolved_by_ai` rises by the same amount;
+both are already in §8.1's statistics, so the shift is visible. Phase 15 measures whether AI
+resolution recovers those forms as accurately, and at what cost.
 
 **Anti-fabrication rule (`PROJECT.md` §29 "never silently invent evidence"):** every
 `supporting_quote` is verified against the stored comment body — **normalised, then matched at

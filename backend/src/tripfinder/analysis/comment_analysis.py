@@ -24,7 +24,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
-from tripfinder.domain.models import Comment, EntityType, ResearchPlan, Stance
+from tripfinder.domain.models import Comment, EntityType, ReasonCode, ResearchPlan, Stance
 
 
 class EntityMention(BaseModel):
@@ -32,9 +32,6 @@ class EntityMention(BaseModel):
 
     raw_text: str = Field(min_length=1)
     """Verbatim from the comment — the surface form, before any normalization."""
-
-    normalized_guess: str = Field(min_length=1)
-    """The model's guess at a canonical name. Only a guess: Phase 9 resolves it."""
 
     entity_type: EntityType
     stance: Stance
@@ -52,14 +49,18 @@ class CommentAnalysis(BaseModel):
     scope_match: bool
     overall_confidence: float = Field(ge=0.0, le=1.0)
     mentions: list[EntityMention] = Field(default_factory=list)
-    reasoning: str = Field(min_length=1)
-    """One sentence, for debugging — and for explaining a thin result later."""
+    reason_code: ReasonCode
+    """Why this verdict, from a closed set. Counted, not read one at a time (§2.12)."""
 
 
 class CommentAnalysisBatch(BaseModel):
     """One batched analysis call's response."""
 
     items: list[CommentAnalysis] = Field(default_factory=list)
+
+
+_REASON_CODES = " | ".join(code.value for code in ReasonCode)
+"""Spelled into the prompt so the model chooses from the enum, not around it."""
 
 
 def _describe(comment: Comment) -> str:
@@ -89,11 +90,14 @@ def build_comment_analysis_prompt(plan: ResearchPlan, comments: Sequence[Comment
         "- scope_match: whether what it recommends is inside the scope\n"
         "- overall_confidence: 0.0-1.0 in this whole analysis\n"
         "- mentions: one entry per place the comment names, each with\n"
-        "  raw_text (verbatim from the comment), normalized_guess (your "
-        "best canonical name for it), entity_type, stance "
+        "  raw_text (verbatim from the comment), entity_type, stance "
         "(positive|negative|mixed|mention_only), strength (0.0-1.0, how "
         "enthusiastic the recommendation is), and supporting_quote\n"
-        "- reasoning: one sentence\n\n"
+        f"- reason_code: exactly one of {_REASON_CODES}\n\n"
+        "Write raw_text exactly as the comment writes it. Do not expand an "
+        "abbreviation, correct a spelling or supply the name you think is "
+        "meant — a later step resolves names against a catalogue, and it "
+        "needs the wording the commenter used.\n\n"
         "supporting_quote MUST be copied character for character from the "
         "comment it came from. A quote that does not appear verbatim in the "
         "comment is discarded, and the mention with it. Never invent, "

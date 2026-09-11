@@ -26,6 +26,7 @@ from tripfinder.domain.models import (
     EntityResolutionMethod,
     EntityResolutionOutcome,
     EntityType,
+    ReasonCode,
     ResearchStatus,
     Stance,
 )
@@ -49,7 +50,6 @@ _RUN: PipelineContext | None = None
 def _mention(raw_text: str, quote: str) -> EntityMention:
     return EntityMention(
         raw_text=raw_text,
-        normalized_guess=raw_text,
         entity_type=EntityType.STATE,
         stance=Stance.POSITIVE,
         strength=0.8,
@@ -80,7 +80,7 @@ async def _run() -> PipelineContext:
             scope_match=True,
             overall_confidence=0.9,
             mentions=[_mention(raw_text, quote)],
-            reasoning="evaluation fixture",
+            reason_code=ReasonCode.RECOMMENDS,
         )
         for index, (raw_text, quote) in enumerate(FORMS)
     ]

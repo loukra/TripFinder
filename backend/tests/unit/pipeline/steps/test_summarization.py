@@ -81,7 +81,6 @@ def _resolution(
         comment_id=comment_id,
         mention=EntityMention(
             raw_text=entity.canonical_name,
-            normalized_guess=entity.canonical_name,
             entity_type=entity.entity_type,
             stance=stance,
             strength=0.8,

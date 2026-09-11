@@ -32,6 +32,7 @@ from tripfinder.analysis.comment_analysis import (
 )
 from tripfinder.domain.models import (
     EntityType,
+    ReasonCode,
     ResearchStatus,
     Stance,
     SuppressionReason,
@@ -82,7 +83,6 @@ def _suppressions(context: PipelineContext, reason: SuppressionReason) -> list[i
 def _mention(**overrides: object) -> EntityMention:
     payload: dict[str, object] = {
         "raw_text": "Michigan",
-        "normalized_guess": "Michigan",
         "entity_type": EntityType.STATE,
         "stance": Stance.POSITIVE,
         "strength": 0.8,
@@ -100,7 +100,7 @@ def _analysis(comment_id: str, *mentions: EntityMention) -> CommentAnalysis:
         scope_match=True,
         overall_confidence=0.9,
         mentions=list(mentions),
-        reasoning="a hand-built analysis",
+        reason_code=ReasonCode.RECOMMENDS,
     )
 
 
@@ -163,20 +163,26 @@ class TestSemanticMatchesSurviveWhereKeywordsWouldNot:
 
         assert entry.mention is not None
         (analysis,) = context.data["counted_analyses"]
-        assert [mention.normalized_guess for mention in analysis.mentions] == [entry.mention.entity]
+        assert [mention.raw_text for mention in analysis.mentions] == [entry.mention.raw_text]
         assert analysis.mentions[0].stance is Stance.POSITIVE
 
     async def test_the_state_it_recommends_is_never_named_in_its_body(self) -> None:
-        """The mention exists because of meaning alone — the name is not in the text."""
+        """The mention exists because of meaning alone — the name is not in the text.
+
+        What this step reports is the *wording*: "the Beaver State". Arriving
+        at Oregon from it is §4.6 step 8's job, and since 14.6a it is the only
+        step that does so — the model no longer ships a canonical guess of its
+        own alongside the quote.
+        """
         entry = one("c-equivalent-1")
         context = _context(counted=[entry], responses=[expected_batch((entry,))])
 
         await CommentAnalysisStep().run(context)
 
         (analysis,) = context.data["counted_analyses"]
-        assert analysis.mentions[0].normalized_guess == "Oregon"
-        assert "Oregon" not in entry.body
+        assert analysis.mentions[0].raw_text == "Beaver State"
         assert analysis.mentions[0].raw_text in entry.body
+        assert "Oregon" not in entry.body
 
 
 class TestQuoteVerification:
@@ -247,6 +253,42 @@ class TestQuoteVerification:
         await CommentAnalysisStep().run(context)
 
         assert context.data["counted_analyses"][0].mentions == []
+
+
+class TestTheReasonCodeBreakdown:
+    """§2.12 traded a prose sentence for a countable one (plan §0.1)."""
+
+    async def test_every_code_is_reported_even_at_zero(self) -> None:
+        """A code missing from the breakdown and a code at zero read alike."""
+        context = _context(counted=CLEAR, responses=[expected_batch(CLEAR)])
+
+        await CommentAnalysisStep().run(context)
+
+        statistics = context.research.statistics
+        assert all(f"analysis_reason_{code.value}" in statistics for code in ReasonCode)
+
+    async def test_the_counts_add_up_to_the_comments_analysed(self) -> None:
+        context = _context(counted=ALL, responses=[expected_batch()])
+
+        await CommentAnalysisStep().run(context)
+
+        statistics = context.research.statistics
+        total = sum(statistics[f"analysis_reason_{code.value}"] for code in ReasonCode)
+        assert total == statistics["comments_with_analysis"]
+
+    async def test_an_off_topic_corpus_and_a_recommending_one_are_distinguishable(self) -> None:
+        """The whole point: "nobody recommended anything" has to name its shape."""
+        irrelevant = labeled("irrelevant")
+        off_topic = _context(counted=irrelevant, responses=[expected_batch(irrelevant)])
+        recommending = _context(counted=CLEAR, responses=[expected_batch(CLEAR)])
+
+        await CommentAnalysisStep().run(off_topic)
+        await CommentAnalysisStep().run(recommending)
+
+        assert off_topic.research.statistics["analysis_reason_off_topic"] == len(irrelevant)
+        assert off_topic.research.statistics["analysis_reason_recommends"] == 0
+        assert recommending.research.statistics["analysis_reason_recommends"] == len(CLEAR)
+        assert recommending.research.statistics["analysis_reason_off_topic"] == 0
 
 
 class TestBatching:
