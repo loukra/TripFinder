@@ -12,6 +12,10 @@ Two things this loop owns beyond queue mechanics:
 * **Cancellation** (plan §10 Phase 13). ``should_cancel`` polls the claimed
   job's ``cancel_requested_at`` flag between pipeline steps — the API sets
   it when a cancel request arrives for a job already running.
+* **Progress persistence.** ``on_progress`` saves ``research.status`` after
+  every step, not only once at the end — a real run against live adapters
+  can take minutes, and without this the API has nothing to report but
+  "pending" for the run's entire duration even while it is actively working.
 * **The error contract** (plan §0.1, plan §10 Phase 13). ``PipelineRunner``
   already converts an LLM provider failure into a named, ``failed`` research;
   everything else — a bug, a mapping error, anything unexpected — used to
@@ -31,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tripfinder.domain.models import FailureKind, ResearchStatus
 from tripfinder.jobs.repository import JobRepository
 from tripfinder.persistence.repositories import ResearchRepository
+from tripfinder.pipeline.base import ProgressEvent
 from tripfinder.pipeline.real_pipeline import (
     build_pipeline_context_for,
     build_pipeline_runner,
@@ -68,8 +73,16 @@ async def run_once(
     context = None
     try:
         context = build_pipeline_context_for(research, settings=settings)
+        pipeline_context = context
+
+        async def _persist_progress(event: ProgressEvent) -> None:
+            async with session_factory() as session:
+                await ResearchRepository(session).save(pipeline_context.research)
+
         runner = (
-            build_resumed_pipeline_runner() if is_resuming(research) else build_pipeline_runner()
+            build_resumed_pipeline_runner(on_progress=_persist_progress)
+            if is_resuming(research)
+            else build_pipeline_runner(on_progress=_persist_progress)
         )
         context = await runner.run(context, should_cancel=_should_cancel)
     except Exception as exc:

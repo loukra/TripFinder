@@ -76,9 +76,13 @@ async def test_records_a_progress_event_per_step_in_sequence() -> None:
 
 async def test_invokes_on_progress_callback_for_each_step() -> None:
     seen: list[ProgressEvent] = []
+
+    async def _on_progress(event: ProgressEvent) -> None:
+        seen.append(event)
+
     runner = PipelineRunner(
         [_SetsStatusStep("only", ResearchStatus.DISCOVERING)],
-        on_progress=seen.append,
+        on_progress=_on_progress,
     )
 
     await runner.run(_context())

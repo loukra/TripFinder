@@ -17,7 +17,7 @@ from __future__ import annotations
 from tripfinder.ai.factory import build_llm_provider
 from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.pipeline.base import PipelineContext
-from tripfinder.pipeline.runner import PipelineRunner
+from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 from tripfinder.pipeline.steps.aggregation import AggregationStep
 from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
 from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
@@ -51,18 +51,19 @@ _POST_UNDERSTANDING_STEPS = (
 )
 
 
-def build_pipeline_runner() -> PipelineRunner:
+def build_pipeline_runner(*, on_progress: ProgressListener | None = None) -> PipelineRunner:
     """The full plan §4.6 pipeline, Preflight through Summarization."""
     return PipelineRunner(
         [
             SourcePreflightStep(),
             QueryUnderstandingStep(),
             *(cls() for cls in _POST_UNDERSTANDING_STEPS),
-        ]
+        ],
+        on_progress=on_progress,
     )
 
 
-def build_resumed_pipeline_runner() -> PipelineRunner:
+def build_resumed_pipeline_runner(*, on_progress: ProgressListener | None = None) -> PipelineRunner:
     """The pipeline for a research resuming after clarification (plan §6).
 
     Preflight and Query Understanding already ran in the pass that paused
@@ -70,7 +71,7 @@ def build_resumed_pipeline_runner() -> PipelineRunner:
     (the resolved plan) straight into the resumed context instead of asking
     the model a question it already answered.
     """
-    return PipelineRunner([cls() for cls in _POST_UNDERSTANDING_STEPS])
+    return PipelineRunner([cls() for cls in _POST_UNDERSTANDING_STEPS], on_progress=on_progress)
 
 
 def is_resuming(research: Research) -> bool:
