@@ -16,6 +16,11 @@ granularity as ``on_progress`` — a step already in flight (an LLM or source
 call) always finishes before a cancellation takes effect. There is no
 mechanism to interrupt a step mid-call, and pretending otherwise would risk
 persisting half-written state.
+
+``on_progress`` is awaited, so the worker can use it to persist
+``research.status`` to the database after every step — without it, a real
+run only ever writes its status once, at the very end, and the UI shows
+"pending" for the run's entire duration even while it is actively working.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEven
 
 logger = logging.getLogger(__name__)
 
-ProgressListener = Callable[[ProgressEvent], None]
+ProgressListener = Callable[[ProgressEvent], Awaitable[None]]
 CancellationCheck = Callable[[], Awaitable[bool]]
 
 
@@ -59,7 +64,7 @@ class PipelineRunner:
             )
             context.progress.append(event)
             if self._on_progress is not None:
-                self._on_progress(event)
+                await self._on_progress(event)
             if is_halting(context.research.status):
                 break
             if should_cancel is not None and await should_cancel():

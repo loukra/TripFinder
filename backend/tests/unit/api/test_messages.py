@@ -14,6 +14,7 @@ import pytest
 
 from tripfinder.api.messages import (
     FAILURE_MESSAGES,
+    PROGRESS_FLAVOR,
     STATUS_MESSAGES,
     percentages_suppressed,
     research_message,
@@ -87,6 +88,54 @@ class TestDegradedIsNeverMistakenForThin:
 
         assert "no evidence" in message
         assert "nothing to conclude" in message
+
+
+class TestProgressFlavor:
+    """Loading-stage copy only — plan §0.1 rule 4 governs the terminal §7.1
+    outcomes, not "what is happening right now" text."""
+
+    _NOT_FLAVORED = frozenset(
+        {
+            ResearchStatus.NEEDS_CLARIFICATION,
+            ResearchStatus.REJECTED,
+            ResearchStatus.COMPLETED,
+            ResearchStatus.COMPLETED_PARTIAL,
+            ResearchStatus.COMPLETED_DEGRADED,
+            ResearchStatus.SOURCE_UNAVAILABLE,
+            ResearchStatus.FAILED,
+            ResearchStatus.CANCELLED,
+        }
+    )
+
+    def test_flavor_never_covers_a_terminal_or_prompt_status(self) -> None:
+        assert set(PROGRESS_FLAVOR).isdisjoint(self._NOT_FLAVORED)
+
+    @pytest.mark.parametrize("status", list(PROGRESS_FLAVOR))
+    def test_every_variant_is_non_empty_prose(self, status: ResearchStatus) -> None:
+        assert all(variant.strip() for variant in PROGRESS_FLAVOR[status])
+
+    @pytest.mark.parametrize("status", list(PROGRESS_FLAVOR))
+    def test_a_flavored_status_never_returns_outside_its_own_variants(
+        self, status: ResearchStatus
+    ) -> None:
+        seen = {research_message(status) for _ in range(50)}
+
+        assert seen <= set(PROGRESS_FLAVOR[status])
+
+    def test_an_unflavored_status_returns_its_plain_wording_every_time(self) -> None:
+        for _ in range(10):
+            assert research_message(ResearchStatus.COMPLETED) == status_message(
+                ResearchStatus.COMPLETED
+            )
+
+    def test_a_failed_run_with_a_named_cause_ignores_flavor_entirely(self) -> None:
+        """``FAILED`` has no flavor variants, so this would already be true —
+        but the failure-cause branch must still be checked first regardless."""
+        failure = ResearchFailure(kind=FailureKind.LLM_UNAVAILABLE, step="x", detail="why")
+
+        assert research_message(ResearchStatus.FAILED, failure) == FAILURE_MESSAGES[
+            FailureKind.LLM_UNAVAILABLE
+        ]
 
 
 class TestPercentageSuppression:

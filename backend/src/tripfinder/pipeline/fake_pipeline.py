@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.pipeline.base import PipelineContext
-from tripfinder.pipeline.runner import PipelineRunner
+from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 from tripfinder.pipeline.steps.fake import (
     FakeAggregationStep,
     FakeAnalysisResponse,
@@ -58,7 +58,7 @@ def build_fake_pipeline_context_for(research: Research) -> PipelineContext:
     return PipelineContext(research=research, source=source, llm=llm)
 
 
-def build_fake_pipeline_runner() -> PipelineRunner:
+def build_fake_pipeline_runner(*, on_progress: ProgressListener | None = None) -> PipelineRunner:
     """The runner for the coarse-grained Phase 2 fake pipeline."""
     return PipelineRunner(
         [
@@ -67,5 +67,6 @@ def build_fake_pipeline_runner() -> PipelineRunner:
             FakeRetrievalStep(),
             FakeAnalysisStep(),
             FakeAggregationStep(),
-        ]
+        ],
+        on_progress=on_progress,
     )
