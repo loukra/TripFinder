@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import BaseModel
@@ -37,12 +38,14 @@ from tripfinder.domain.models import (
     EntityType,
     FailureKind,
     ReasonCode,
+    ResearchFlag,
     ResearchStatus,
     SourceOutcome,
     Stance,
     SuppressionReason,
 )
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.deadline import admission_deadline, mark_started
 from tripfinder.pipeline.health import SourceAssessment, get_recorder
 from tripfinder.pipeline.steps.comment_analysis import (
     ANALYSIS_ADAPTER,
@@ -66,6 +69,49 @@ class RecordingLLM:
     ) -> T:
         self.prompts.append(prompt)
         return await self._inner.complete_structured(prompt=prompt, response_model=response_model)
+
+
+START = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
+
+
+class Clock:
+    """A clock that advances by a fixed step every time a call is made.
+
+    Wall-clock sleeping would make these tests slow and flaky; what the
+    admission gate actually reads is "how much time has passed", so the
+    tests drive that directly.
+    """
+
+    def __init__(self, start: datetime, *, per_call: timedelta) -> None:
+        self._now = start
+        self._per_call = per_call
+        self.calls = 0
+
+    def read(self) -> datetime:
+        return self._now
+
+    def spend(self) -> None:
+        self.calls += 1
+        self._now += self._per_call
+
+
+class SlowLLM:
+    """Answers in order, and charges the clock for each call it serves."""
+
+    def __init__(self, answers: Sequence[CommentAnalysisBatch], *, clock: Clock) -> None:
+        self._answers = list(answers)
+        self._clock = clock
+        self._next = 0
+
+    async def complete_structured[T: BaseModel](
+        self, *, prompt: str, response_model: type[T]
+    ) -> T:
+        answer = self._answers[self._next]
+        self._next += 1
+        await asyncio.sleep(0)
+        self._clock.spend()
+        assert isinstance(answer, response_model)
+        return answer
 
 
 class FlakyLLM:
@@ -504,6 +550,119 @@ class TestTheCountedAndEvidenceCorporaStaySeparate:
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
         assert all(f"id={entry.id}" in llm.prompts[0] for entry in counted)
+
+
+class TestTheDeadlineStopsAdmissionNeverCompletion:
+    """Plan §2.12.2. maxResearchDuration went unread until here: the measured
+    run finished in 2408 s against a 300 s budget and nothing noticed."""
+
+    def _timed(
+        self, entries: Sequence[LabeledComment], *, started: datetime, clock: Clock
+    ) -> PipelineContext:
+        context = make_context(
+            llm=SlowLLM([expected_batch((entry,)) for entry in entries], clock=clock),
+            status=ResearchStatus.ANALYZING,
+        )
+        context.data["counted_comments"] = [entry.as_comment() for entry in entries]
+        context.data["evidence_comments"] = []
+        mark_started(context, now=started)
+        return context
+
+    async def test_no_batch_is_dispatched_after_the_deadline(self) -> None:
+        clock = Clock(START, per_call=timedelta(seconds=60))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=1, clock=clock.read
+        ).run(context)
+
+        # 300 s budget, 60 s reserve: the window is 240 s, and each call
+        # costs 60 s. One wave is exempt, then four more fit.
+        assert clock.calls == 5
+        assert context.research.statistics["comments_not_analysed_budget"] == len(ALL) - 5
+
+    async def test_a_batch_in_flight_when_the_deadline_passes_is_still_kept(self) -> None:
+        """Its tokens are already paid for; dropping the answer buys nothing."""
+        clock = Clock(START, per_call=timedelta(seconds=1000))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=1, clock=clock.read
+        ).run(context)
+
+        analysed = [analysis.comment_id for analysis in context.data["comment_analyses"]]
+        assert analysed == [ALL[0].id]
+        assert context.research.statistics["comments_with_analysis"] == 1
+
+    async def test_one_wave_goes_out_even_when_the_deadline_has_already_passed(self) -> None:
+        """Full cost and no evidence is the worst outcome available (§2.12.2)."""
+        clock = Clock(START + timedelta(hours=1), per_call=timedelta(0))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=3, clock=clock.read
+        ).run(context)
+
+        assert len(context.data["comment_analyses"]) == 3
+        assert context.research.statistics["comments_not_analysed_budget"] == len(ALL) - 3
+
+    async def test_the_dispatch_deadline_is_the_budget_minus_the_tail_reserve(self) -> None:
+        """Derived from the promise, not equal to it — five minutes must not mean seven."""
+        context = make_context(status=ResearchStatus.ANALYZING)
+        budget = context.research.research_config.budget
+        mark_started(context, now=START)
+
+        assert admission_deadline(context) == START + timedelta(
+            seconds=budget.max_research_duration_seconds - budget.tail_reserve_seconds
+        )
+        assert budget.tail_reserve_seconds == 60
+
+    async def test_undispatched_comments_are_budget_limited_not_failed(self) -> None:
+        """Two different claims: "we stopped on purpose" against "we could not see"."""
+        clock = Clock(START + timedelta(hours=1), per_call=timedelta(0))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=1, clock=clock.read
+        ).run(context)
+
+        statistics = context.research.statistics
+        assert statistics["comments_not_analysed_budget"] == len(ALL) - 1
+        assert statistics["comments_lost_to_errors"] == 0
+        assert _suppressions(context, SuppressionReason.BUDGET_MAX_RESEARCH_DURATION) == [
+            len(ALL) - 1
+        ]
+        assert _suppressions(context, SuppressionReason.ANALYSIS_BATCH_FAILED) == []
+
+    async def test_expiry_names_its_limiting_factor(self) -> None:
+        clock = Clock(START + timedelta(hours=1), per_call=timedelta(0))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=1, clock=clock.read
+        ).run(context)
+
+        (entry,) = [
+            suppression
+            for suppression in context.research.diagnostics.suppressions
+            if suppression.reason is SuppressionReason.BUDGET_MAX_RESEARCH_DURATION
+        ]
+        assert entry.detail is not None
+        assert "300s budget" in entry.detail
+        assert "60s tail reserve" in entry.detail
+        assert ResearchFlag.BUDGET_LIMIT_REACHED in context.research.diagnostics.flags
+
+    async def test_a_run_inside_its_budget_dispatches_everything(self) -> None:
+        clock = Clock(START, per_call=timedelta(seconds=1))
+        context = self._timed(ALL, started=START, clock=clock)
+
+        await CommentAnalysisStep(
+            batch_size=1, max_concurrent_batches=2, clock=clock.read
+        ).run(context)
+
+        assert len(context.data["comment_analyses"]) == len(ALL)
+        assert context.research.statistics["comments_not_analysed_budget"] == 0
+        assert context.research.diagnostics.flags == []
 
 
 class TestOneFailedBatchDoesNotTakeTheRunWithIt:

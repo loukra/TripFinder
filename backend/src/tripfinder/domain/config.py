@@ -20,6 +20,25 @@ class ResearchBudget(BaseModel):
     max_comments: int = Field(default=4000, gt=0)
     max_ai_analysis_items: int = Field(default=1000, gt=0)
     max_research_duration_seconds: int = Field(default=300, gt=0)
+    tail_reserve_seconds: int = Field(default=60, ge=0)
+    """Subtracted from the duration budget to derive the dispatch deadline (plan §2.12.2).
+
+    The limit gates what may still be *started*, never what may finish: a
+    request is billed the moment it is sent, so abandoning its response buys
+    no saving, only a smaller sample. Work already in flight is therefore
+    always awaited, which means the deadline alone would overrun the budget
+    by up to one batch.
+
+    So the 300 s stays the promise about the whole research and the dispatch
+    deadline is derived from it — ``started_at + maxResearchDuration −
+    tailReserve`` — rather than the other way round. Stating it the other way
+    would make the user's five minutes mean seven, which is the kind of quiet
+    redefinition §0.1 exists to prevent.
+
+    60 s is a starting value, not a measured one. Phase 15 calibrates it
+    against real runs.
+    """
+
     max_estimated_cost_usd: float = Field(default=0.50, gt=0.0)
 
 

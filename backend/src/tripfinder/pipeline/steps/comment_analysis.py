@@ -36,7 +36,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 from tripfinder.ai.errors import LLMCredentialError, LLMProviderError
@@ -46,8 +47,15 @@ from tripfinder.analysis.comment_analysis import (
     EntityMention,
     build_comment_analysis_prompt,
 )
-from tripfinder.domain.models import Comment, ReasonCode, ResearchPlan, SuppressionReason
+from tripfinder.domain.models import (
+    Comment,
+    ReasonCode,
+    ResearchFlag,
+    ResearchPlan,
+    SuppressionReason,
+)
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.deadline import admission_deadline
 from tripfinder.pipeline.health import get_recorder, reassess_after_analysis
 from tripfinder.sources.failures import failure_kind
 
@@ -97,6 +105,9 @@ class _BatchResult(NamedTuple):
     lost: tuple[str, ...]
     """Comments whose whole batch failed. Empty unless ``failure`` is set."""
 
+    undispatched: tuple[str, ...] = ()
+    """Comments in a batch the deadline refused to admit. Budget-limited, not failed."""
+
     failure: str | None = None
     """The §8.1 failure kind, when this batch raised instead of answering."""
 
@@ -140,9 +151,11 @@ class CommentAnalysisStep:
         *,
         batch_size: int = DEFAULT_ANALYSIS_BATCH_SIZE,
         max_concurrent_batches: int = DEFAULT_MAX_CONCURRENT_BATCHES,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._batch_size = batch_size
         self._max_concurrent_batches = max_concurrent_batches
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def run(self, context: PipelineContext) -> PipelineContext:
         plan: ResearchPlan = context.data["plan"]
@@ -163,6 +176,7 @@ class CommentAnalysisStep:
         fabricated = 0
         unanswered: list[str] = []
         lost: list[str] = []
+        undispatched: list[str] = []
         failures: Counter[str] = Counter()
         for result in results:
             analyses.update(result.analyses)
@@ -170,9 +184,10 @@ class CommentAnalysisStep:
             fabricated += result.fabricated
             unanswered.extend(result.unanswered)
             lost.extend(result.lost)
+            undispatched.extend(result.undispatched)
             if result.failure is not None:
                 failures[result.failure] += 1
-        self._record_suppressions(context, fabricated, unanswered, lost, failures)
+        self._record_suppressions(context, fabricated, unanswered, lost, undispatched, failures)
 
         counted_analyses = _in_order(counted, analyses)
         evidence_analyses = _in_order(evidence, analyses)
@@ -191,6 +206,10 @@ class CommentAnalysisStep:
         statistics["analysis_batches_attempted"] = len(batches)
         statistics["analysis_batches_failed"] = sum(failures.values())
         statistics["comments_lost_to_errors"] = len(lost)
+        statistics["comments_not_analysed_budget"] = len(undispatched)
+        statistics["analysis_batches_not_dispatched"] = sum(
+            1 for result in results if result.undispatched
+        )
 
         # §8.1: the gap between what was sent and what came back is accounted
         # here, by the step that caused it, rather than left for a later step
@@ -222,9 +241,28 @@ class CommentAnalysisStep:
         """
         limit = asyncio.Semaphore(self._max_concurrent_batches)
         recorder = get_recorder(context)
+        deadline = admission_deadline(context)
 
-        async def analyse_one(batch: Sequence[Comment]) -> _BatchResult:
+        async def analyse_one(index: int, batch: Sequence[Comment]) -> _BatchResult:
             async with limit:
+                # The clock is read here, holding the semaphore, because this
+                # is the moment of dispatch — checking it up front would
+                # admit a batch that only goes out minutes later (§2.12.2).
+                #
+                # The first wave is exempt. A run that paid for query
+                # understanding, triage and retrieval and then analysed
+                # nothing is the worst outcome available: full cost, no
+                # evidence, and a results page that cannot say anything. One
+                # wave costs one batch latency.
+                if index >= self._max_concurrent_batches and self._clock() > deadline:
+                    return _BatchResult(
+                        analyses={},
+                        discarded=0,
+                        fabricated=0,
+                        unanswered=(),
+                        lost=(),
+                        undispatched=tuple(comment.id for comment in batch),
+                    )
                 try:
                     result = await self._analyse(context, plan, batch)
                 except LLMCredentialError:
@@ -252,7 +290,11 @@ class CommentAnalysisStep:
                 recorder.record_success(ANALYSIS_ADAPTER)
                 return result
 
-        return list(await asyncio.gather(*(analyse_one(batch) for batch in batches)))
+        return list(
+            await asyncio.gather(
+                *(analyse_one(index, batch) for index, batch in enumerate(batches))
+            )
+        )
 
     async def _analyse(
         self, context: PipelineContext, plan: ResearchPlan, batch: Sequence[Comment]
@@ -319,10 +361,32 @@ class CommentAnalysisStep:
         fabricated: int,
         unanswered: Sequence[str],
         lost: Sequence[str],
+        undispatched: Sequence[str],
         failures: Counter[str],
     ) -> None:
         """Once, after every batch is in — so the record does not depend on timing."""
         diagnostics = context.research.diagnostics
+        if undispatched:
+            # Budget-limited, not failed, and the two are different claims:
+            # this one says "we stopped on purpose, the sample is valid and
+            # smaller"; ANALYSIS_BATCH_FAILED says "we tried and could not
+            # see" (§0.1, §7.1's completed_partial vs completed_degraded).
+            budget = context.research.research_config.budget
+            diagnostics.record_suppression(
+                step=self.name,
+                reason=SuppressionReason.BUDGET_MAX_RESEARCH_DURATION,
+                count=len(undispatched),
+                detail=(
+                    "comments never sent for analysis — the dispatch deadline "
+                    f"({budget.max_research_duration_seconds}s budget minus a "
+                    f"{budget.tail_reserve_seconds}s tail reserve) had passed"
+                ),
+            )
+            diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
+            logger.info(
+                "analysis: %d comment(s) not dispatched — past the admission deadline",
+                len(undispatched),
+            )
         if lost:
             kinds = ", ".join(f"{kind} x{count}" for kind, count in sorted(failures.items()))
             diagnostics.record_suppression(

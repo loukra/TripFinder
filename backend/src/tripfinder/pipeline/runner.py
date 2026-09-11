@@ -17,6 +17,10 @@ call) always finishes before a cancellation takes effect. There is no
 mechanism to interrupt a step mid-call, and pretending otherwise would risk
 persisting half-written state.
 
+The run's start is stamped here, once, because this is the only place that
+knows when the pass actually began — plan §2.12.2's duration budget is
+measured from it.
+
 ``on_progress`` is awaited, so the worker can use it to persist
 ``research.status`` to the database after every step — without it, a real
 run only ever writes its status once, at the very end, and the UI shows
@@ -31,6 +35,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from tripfinder.ai.errors import LLMProviderError
 from tripfinder.domain.models import ResearchStatus, is_halting
 from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEvent
+from tripfinder.pipeline.deadline import mark_started
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,11 @@ class PipelineRunner:
     async def run(
         self, context: PipelineContext, *, should_cancel: CancellationCheck | None = None
     ) -> PipelineContext:
+        # The duration budget is measured from here, not from
+        # ``Research.created_at``: a run resuming after clarification (plan §6)
+        # must not be charged for the time a human spent answering (§2.12.2).
+        mark_started(context)
+
         for sequence, step in enumerate(self._steps, start=1):
             try:
                 context = await step.run(context)
