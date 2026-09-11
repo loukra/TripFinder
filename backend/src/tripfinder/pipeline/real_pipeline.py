@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from tripfinder.ai.factory import build_llm_provider
 from tripfinder.domain.models import Research, ResearchStatus
-from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.base import PartialResultsListener, PipelineContext
 from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 from tripfinder.pipeline.steps.aggregation import AggregationStep
 from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
@@ -86,18 +86,34 @@ def is_resuming(research: Research) -> bool:
     return research.status is ResearchStatus.DISCOVERING and research.resume_plan is not None
 
 
-def build_pipeline_context_for(research: Research, *, settings: Settings) -> PipelineContext:
+def build_pipeline_context_for(
+    research: Research,
+    *,
+    settings: Settings,
+    on_partial_results: PartialResultsListener | None = None,
+) -> PipelineContext:
     """A context wired to the real adapters this process is configured for.
 
     The source adapter is always Arctic Shift (plan §1 — the MVP's only
     one). The LLM and search providers follow ``settings``, and both default
     to fake, so no process reaches OpenAI or Serper without ``LLM_PROVIDER``
     / ``SEARCH_PROVIDER`` set explicitly (plan §9, §2.11).
+
+    ``on_partial_results`` is where provisional rankings go while the run is
+    still analysing (plan §2.13). Left unset, the run produces none — the
+    pipeline is unchanged, it simply reports once at the end as it did
+    before.
     """
     source = ArcticShiftAdapter()
     llm = build_llm_provider(settings.llm_provider, openai_api_key=settings.openai_api_key)
     search = build_search_provider(settings.search_provider, serper_api_key=settings.serper_api_key)
-    context = PipelineContext(research=research, source=source, search=search, llm=llm)
+    context = PipelineContext(
+        research=research,
+        source=source,
+        search=search,
+        llm=llm,
+        on_partial_results=on_partial_results,
+    )
     if research.resume_plan is not None:
         context.data["plan"] = research.resume_plan
     return context

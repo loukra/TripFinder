@@ -5,8 +5,15 @@ frontend, because they are promises about what a number means: a
 ``source_unavailable`` research has no results object at all (§8.1 rule 1),
 a ``completed_degraded`` one has no percentages (§8.1 rule 2), a ``failed``
 one has no results object either but does name its cause (§7.1, plan §0.1
-rule 3), and nothing still running, awaiting clarification, rejected or
-cancelled gets a results object that could be mistaken for a finished one.
+rule 3), and nothing awaiting clarification or rejected gets a results
+object that could be mistaken for a finished one.
+
+Since 14.7 a run that is still ``analyzing`` — and a cancelled run that got
+that far — does get one, marked ``provisional`` and with every ``share``
+null (plan §2.13.3). That is not an exception to the obligation above but an
+instance of it: an unfinished ranking has to be unmistakable for a finished
+one, and the way it is made unmistakable is a hole where the percentage
+would be, which no client can fill in by ignoring a flag.
 
 Cancellation (plan §10 Phase 13) has two paths depending on whether a
 worker has already claimed the job: a job still queued is cancelled
@@ -26,7 +33,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.api.dependencies import get_session
-from tripfinder.api.messages import percentages_suppressed, research_message
+from tripfinder.api.messages import (
+    is_provisional,
+    percentages_suppressed,
+    research_message,
+    results_message,
+)
 from tripfinder.api.schemas import (
     ClarifyRequest,
     ClarifyResponse,
@@ -54,6 +66,10 @@ _RESULTS_READY_STATUSES = frozenset(
         ResearchStatus.COMPLETED,
         ResearchStatus.COMPLETED_PARTIAL,
         ResearchStatus.COMPLETED_DEGRADED,
+        # Plan §2.13: a run that is still analysing has real counts from
+        # comments it has already read. They are served as provisional —
+        # counts only, no shares — rather than withheld for five minutes.
+        ResearchStatus.ANALYZING,
     }
 )
 
@@ -217,12 +233,20 @@ async def get_research_results(
     return ResearchResultsResponse(
         id=research.id,
         status=research.status,
-        message=_message(research),
+        message=results_message(research.status),
         percentages_suppressed=suppress_share,
+        provisional=is_provisional(research.status),
         results=[
             ResultItem.from_domain(result, suppress_share=suppress_share)
             for result in research.results
         ],
+        weak_results=[
+            ResultItem.from_domain(result, suppress_share=suppress_share)
+            for result in research.weak_results
+        ],
+        minimum_independent_users=(
+            research.research_config.ranking.minimum_independent_users
+        ),
     )
 
 
@@ -281,9 +305,24 @@ def _status_response(research: Research) -> ResearchStatusResponse:
     )
 
 
+def _holds_a_snapshot(research: Research) -> bool:
+    """Whether a cancelled run has a provisional ranking worth serving (plan §2.13.3).
+
+    §7.1 gave ``cancelled`` no results page, on the reasoning that an
+    interrupted run has nothing to report. Since 14.7 that is no longer
+    true: a run cancelled during analysis has already ranked the comments it
+    read, and throwing that away to show an empty page is the same waste
+    §2.12.2 refuses when it lets in-flight batches finish. A cancelled run
+    with no snapshot behaves exactly as it did before.
+    """
+    return research.status is ResearchStatus.CANCELLED and bool(
+        research.results or research.weak_results
+    )
+
+
 def _require_results_ready(research: Research) -> None:
     """Plan §7.1's "No" column, for every status not already handled by a richer error."""
-    if research.status not in _RESULTS_READY_STATUSES:
+    if research.status not in _RESULTS_READY_STATUSES and not _holds_a_snapshot(research):
         raise HTTPException(
             status_code=409,
             detail=ResearchNotReadyError(

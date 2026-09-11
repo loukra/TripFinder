@@ -146,9 +146,21 @@ class EntityResolutionStep:
         catalog: EntityCatalog | None = None,
         *,
         batch_size: int = DEFAULT_RESOLUTION_BATCH_SIZE,
+        ask_model: bool = True,
     ) -> None:
+        """``ask_model=False`` is the provisional mode plan §2.13 runs snapshots in.
+
+        It does two things, and both matter. The model is not asked — a
+        snapshot after every analysis batch cannot afford a call, and a name
+        the catalogue cannot place is left uncounted rather than guessed at,
+        so a snapshot under-reports, which is the safe direction. And
+        nothing is written to diagnostics: a snapshot decides nothing about
+        the run (§2.13.2), so this step's record of what it could not place
+        would be a record of a corpus that never existed.
+        """
         self._catalog = catalog if catalog is not None else default_catalog()
         self._batch_size = batch_size
+        self._ask_model = ask_model
 
     async def run(self, context: PipelineContext) -> PipelineContext:
         plan: ResearchPlan = context.data["plan"]
@@ -162,7 +174,11 @@ class EntityResolutionStep:
         questions = [
             _question(forms[key]) for key, verdict in verdicts.items() if verdict is None
         ]
-        verdicts.update(await self._ask(context, plan, questions, config))
+        verdicts.update(
+            await self._ask(context, plan, questions, config)
+            if self._ask_model
+            else _unasked(questions)
+        )
 
         settled = {key: verdict for key, verdict in verdicts.items() if verdict is not None}
         entities = _registry(settled.values())
@@ -174,7 +190,8 @@ class EntityResolutionStep:
         context.data["resolved_mentions"] = counted_resolutions + evidence_resolutions
         context.data["entities"] = [entities[key] for key in sorted(entities)]
 
-        self._record(context, forms, settled)
+        if self._ask_model:
+            self._record(context, forms, settled)
         return context
 
     # -- 1. group ------------------------------------------------------
@@ -423,6 +440,25 @@ class EntityResolutionStep:
         statistics["entity_mentions_off_granularity"] = off_granularity
         statistics["entities_resolved"] = len(context.data["entities"])
         statistics.setdefault("entity_resolution_items_discarded", 0)
+
+
+def _unasked(questions: Sequence[ResolutionQuestion]) -> dict[_FormKey, _Verdict]:
+    """What becomes of an ambiguous name when the model is not asked at all.
+
+    Nothing is merged and nothing is guessed, so these names contribute no
+    supporters to a snapshot. The count it shows is therefore a floor on the
+    count the finished run will show — which is what plan §2.13.1 promises a
+    provisional number is.
+    """
+    return {
+        (question.surface_form, question.entity_type): _unresolved(
+            EntityResolutionMethod.RULE,
+            "the catalogue could not place this name, and a provisional ranking "
+            "does not ask the model — not counted here",
+            SuppressionReason.ENTITY_UNRESOLVED,
+        )
+        for question in questions
+    }
 
 
 def _question(form: _Form) -> ResolutionQuestion:
