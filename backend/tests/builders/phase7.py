@@ -64,6 +64,7 @@ def make_comment(
     document_id: str = "d1",
     user_id: str = "u1",
     body: str = SUBSTANTIVE_BODY,
+    score: int | None = None,
 ) -> Comment:
     return Comment(
         id=comment_id,
@@ -72,6 +73,7 @@ def make_comment(
         body=body,
         created_at=NOW - timedelta(days=30),
         permalink=HttpUrl(f"https://reddit.com/comments/{comment_id}"),
+        score=score,
     )
 
 

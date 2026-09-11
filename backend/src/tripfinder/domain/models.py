@@ -168,6 +168,19 @@ class Comment(BaseModel):
     body: str
     created_at: datetime
     permalink: HttpUrl
+    score: int | None = None
+    """The community's vote total, where the source reports one (plan §2.12).
+
+    Used only to decide *which* comments of a thread are worth the analysis
+    budget when it cannot buy all of them (plan §4.6 step 6) — never to
+    weight an opinion. Plan §4.2 counts independent users, and letting an
+    upvote count twice would be exactly the popularity bias `PROJECT.md` §16
+    deduplicates against.
+
+    ``None`` means the source did not say, which is not the same as zero: a
+    comment nobody voted on and a comment whose score we never learned are
+    different facts, and only one of them is evidence about the comment.
+    """
 
 
 class Opinion(BaseModel):
