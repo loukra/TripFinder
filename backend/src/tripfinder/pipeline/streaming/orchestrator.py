@@ -116,6 +116,14 @@ async def run_strands(
             triaged += len(admitted)
             polling.extend(wave_polling)
             topical.extend(wave_topical)
+            # Discovery's next turn reads this (§4.5: only polling threads
+            # can contribute a counted opinion, and in the measured run 74
+            # of 106 could not). It steers a prompt and nothing else — no
+            # statistic, suppression or status is derived from it.
+            context.data["triage_tally"] = {
+                "polling": len(polling),
+                "topical": len(topical),
+            }
 
             for document, comment_class in (
                 *((document, CommentClass.COUNTED) for document in wave_polling),

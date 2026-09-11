@@ -15,6 +15,17 @@ class ResearchBudget(BaseModel):
     """Hard limits on how much a single research is allowed to cost (plan §1.1)."""
 
     max_search_queries: int = Field(default=20, gt=0)
+    search_queries_per_turn: int = Field(default=5, gt=0)
+    """How many queries one discovery turn may propose (plan §2.14.2).
+
+    The cap above counts queries; this one decides how many model round
+    trips they cost. At one per turn, discovery was the serial part of a
+    concurrent pipeline: the measured run analysed 2153 of 4417 admitted
+    comments and left roughly two thirds of the analysis window idle,
+    waiting for documents nobody had searched for yet. The searches within
+    a turn run concurrently, so five per turn is four fewer round trips and
+    the same number of searches.
+    """
     max_posts_per_query: int = Field(default=40, gt=0)
     max_total_posts: int = Field(default=300, gt=0)
     max_comments: int = Field(default=12000, gt=0)

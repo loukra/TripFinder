@@ -147,7 +147,7 @@ class Model:
                 )
             return DiscoveryTurnResponse(  # type: ignore[return-value]
                 should_continue=True,
-                next_query=f"angle number {self.search_turns}",
+                next_queries=[f"angle number {self.search_turns}"],
                 reasoning="fresh angle",
             )
         if response_model is DocumentTriageBatch:

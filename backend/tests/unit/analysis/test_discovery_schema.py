@@ -46,15 +46,33 @@ def test_prompt_names_no_issued_queries_when_none_yet() -> None:
     assert "(none yet)" in prompt
 
 
-def test_response_defaults_to_no_next_query() -> None:
+def test_prompt_asks_for_the_batch_size_it_was_given() -> None:
+    prompt = build_discovery_prompt(
+        _plan(), issued_queries=[], documents_found=0, queries_per_turn=5
+    )
+
+    assert "up to 5 new search queries" in prompt
+
+
+def test_prompt_says_which_threads_are_worth_finding() -> None:
+    """§4.5: only an open question can produce a counted opinion, and a
+    discovery loop that is not told so spends its budget on trip reports —
+    74 of 106 threads in the measured run."""
+    prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+    assert "open question" in prompt
+    assert "trip report" in prompt
+
+
+def test_response_defaults_to_no_next_queries() -> None:
     response = DiscoveryTurnResponse(should_continue=False, reasoning="enough coverage gathered")
 
-    assert response.next_query is None
+    assert response.next_queries == []
 
 
 def test_response_requires_a_non_empty_reasoning() -> None:
     with pytest.raises(ValidationError):
-        DiscoveryTurnResponse(should_continue=True, next_query="q", reasoning="")
+        DiscoveryTurnResponse(should_continue=True, next_queries=["q"], reasoning="")
 
 
 def test_the_turn_schema_no_longer_asks_the_model_for_a_subreddit() -> None:

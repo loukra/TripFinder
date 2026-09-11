@@ -2,8 +2,12 @@
 
 Two halves, in order:
 
-1. **Find addresses.** The LLM proposes one plain-language query per turn;
-   the tool boundary restricts it to Reddit, runs it, and returns post ids.
+1. **Find addresses.** The LLM proposes a batch of plain-language queries
+   per turn; the tool boundary restricts each to Reddit, runs them
+   **concurrently**, and returns post ids. One query per turn made the model
+   the serial part of a concurrent pipeline — a measured run analysed 2153
+   of 4417 admitted comments, with roughly two thirds of the analysis
+   window idle, waiting for documents nobody had searched for yet.
 2. **Hydrate them.** One batched call to the source adapter turns the
    collected ids into real ``SourceDocument``s.
 
@@ -21,6 +25,7 @@ load-bearing for plan §10 Phase 6 and Phase 14.5 acceptance:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
@@ -94,6 +99,7 @@ async def discover_documents(
     # to, but the snapshot has to say which one failed.
     recorder = get_recorder(context)
 
+    per_turn = max(1, budget.search_queries_per_turn)
     issued_queries: list[str] = []
     post_ids: list[str] = []
     documents: list[SourceDocument] = []
@@ -120,34 +126,54 @@ async def discover_documents(
             context.research.diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
             break
 
+        polling_found, topical_found = _triage_tally(context)
         turn = await context.llm.complete_structured(
             prompt=build_discovery_prompt(
-                plan, issued_queries=issued_queries, documents_found=len(post_ids)
+                plan,
+                issued_queries=issued_queries,
+                documents_found=len(post_ids),
+                queries_per_turn=min(per_turn, budget.max_search_queries - len(issued_queries)),
+                polling_found=polling_found,
+                topical_found=topical_found,
             ),
             response_model=DiscoveryTurnResponse,
         )
 
-        if not turn.should_continue or not turn.next_query:
+        if not turn.should_continue or not turn.next_queries:
             break
 
-        if _is_near_duplicate(turn.next_query, issued_queries):
+        # Every guarantee the one-query loop gave still holds, and each is
+        # now applied across the batch as well as against history: the
+        # search cap counts queries, not turns, and two queries proposed in
+        # the same breath can be near-duplicates of each other.
+        room = budget.max_search_queries - len(issued_queries)
+        batch: list[str] = []
+        for candidate in turn.next_queries:
+            if len(batch) >= room:
+                break
+            if _is_near_duplicate(candidate, [*issued_queries, *batch]):
+                continue
+            batch.append(candidate)
+
+        if not batch:
             consecutive_unproductive_turns += 1
             if consecutive_unproductive_turns >= _MAX_CONSECUTIVE_UNPRODUCTIVE_TURNS:
                 break
             continue
 
         consecutive_unproductive_turns = 0
-        result = await tool.search(turn.next_query)
-        issued_queries.append(turn.next_query)
-        if result.ok:
-            recorder.record_success(context.search.name)
-        else:
-            recorder.record_failure(
-                context.search.name, kind=result.failure_kind or UNKNOWN_FAILURE_KIND
-            )
+        results = await asyncio.gather(*(tool.search(query) for query in batch))
+        issued_queries.extend(batch)
+        for result in results:
+            if result.ok:
+                recorder.record_success(context.search.name)
+            else:
+                recorder.record_failure(
+                    context.search.name, kind=result.failure_kind or UNKNOWN_FAILURE_KIND
+                )
 
         fresh: list[str] = []
-        for post_id in result.post_ids:
+        for post_id in (post_id for result in results for post_id in result.post_ids):
             if post_id not in post_ids and len(post_ids) < budget.max_total_posts:
                 post_ids.append(post_id)
                 fresh.append(post_id)
@@ -178,6 +204,19 @@ class AgenticDiscoveryStep:
             pass
         context.research.status = ResearchStatus.RETRIEVING
         return context
+
+
+def _triage_tally(context: PipelineContext) -> tuple[int, int]:
+    """How the threads found so far were classified, if anything has been.
+
+    Discovery and triage run concurrently (§2.14.2), so this is a reading of
+    a number that is still moving — which is exactly what makes it useful
+    to the next turn, and why nothing downstream is derived from it.
+    """
+    tally = context.data.get("triage_tally")
+    if not isinstance(tally, dict):
+        return 0, 0
+    return int(tally.get("polling", 0)), int(tally.get("topical", 0))
 
 
 async def _hydrate(context: PipelineContext, post_ids: Sequence[str]) -> list[SourceDocument]:
