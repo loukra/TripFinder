@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 const RESEARCH_ID = "11111111-1111-1111-1111-111111111111";
+const QUESTION = "most underrated US states for nature";
 
 const DIAGNOSTICS = {
   source_health: [],
@@ -37,6 +38,9 @@ test("search a query and drill into evidence for the top result", async ({ page 
         id: RESEARCH_ID,
         status,
         message,
+        query: QUESTION,
+        normalized_query: null,
+        created_at: "2026-03-01T12:00:00Z",
         statistics: status === "pending" ? {} : { posts_analyzed: 38 },
         diagnostics: DIAGNOSTICS,
         clarification: null,
@@ -129,6 +133,9 @@ test("shows a provisional ranking while counting, then the finished one", async 
         message: analysing()
           ? "Working out what each comment recommends."
           : "Finished. Every discussion we set out to read was read, so these counts reflect what people actually said.",
+        query: QUESTION,
+        normalized_query: null,
+        created_at: "2026-03-01T12:00:00Z",
         statistics: { comments_with_analysis: analysing() ? 160 : 840 },
         diagnostics: DIAGNOSTICS,
         clarification: null,

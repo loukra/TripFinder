@@ -133,9 +133,34 @@ export interface ResearchStatusResponse {
   id: string;
   status: ResearchStatus;
   message: string;
+  // What the user typed. A run is reachable at its own URL, so the page
+  // showing it may never have seen the question asked (plan §2.15).
+  query: string;
+  normalized_query: string | null;
+  created_at: string | null;
   statistics: Record<string, number>;
   diagnostics: ResearchDiagnostics;
   clarification: ClarificationRequest | null;
+}
+
+// One line of history (plan §2.15). `result_count` is null — not zero — for a
+// run with no results page: zero would say this run looked and found nothing,
+// which is precisely what a broken run must not be able to claim.
+export interface ResearchListItem {
+  id: string;
+  query: string;
+  normalized_query: string | null;
+  created_at: string;
+  status: ResearchStatus;
+  message: string;
+  result_count: number | null;
+}
+
+export interface ResearchListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  runs: ResearchListItem[];
 }
 
 export interface ResultItem {

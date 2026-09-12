@@ -1510,7 +1510,9 @@ analysis dominates a run is read off the run rather than assumed; and prices liv
 POST   /api/research                    -> {id, status}   (14.10: may answer from a previous run;
                                            `fresh=true` never does)
 GET    /api/research                    -> 14.9: past runs, newest first, paginated
-GET    /api/research/{id}               -> status, progress, statistics, budget used
+GET    /api/research/{id}               -> status, progress, statistics, budget used, and
+                                           (14.9) the question asked and the date it was asked,
+                                           since a run is now opened by people who did not start it
 POST   /api/research/{id}/clarify       -> answer a ClarificationRequest, resume
 GET    /api/research/{id}/results       -> ranked results, strong and weak (§2.13.3: also
                                            served while `analyzing`, flagged `provisional`)

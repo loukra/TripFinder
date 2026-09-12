@@ -217,3 +217,23 @@ async def test_a_finished_run_is_reopened_from_history_without_running_anything_
     assert reopened_status["statistics"] == first_status["statistics"]
     assert reopened_status["diagnostics"] == first_status["diagnostics"]
     assert await run_once(session_factory) is False
+
+
+async def test_a_run_reopened_cold_carries_its_own_question(
+    client: TestClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    """A page opened from history has no memory of what was asked, so the run
+    has to say (plan §2.15)."""
+    research = make_research("underrated states for nature")
+    research.created_at = NOW
+    research.normalized_query = "underrated us states for nature"
+    research.status = ResearchStatus.COMPLETED
+    await _persist(session_factory, research)
+
+    body = client.get(f"/api/research/{research.id}").json()
+
+    assert body["query"] == "underrated states for nature"
+    assert body["normalized_query"] == "underrated us states for nature"
+    assert body["created_at"].startswith("2026-03-01T12:00:00")

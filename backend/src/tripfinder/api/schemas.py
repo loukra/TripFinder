@@ -35,6 +35,17 @@ class ResearchStatusResponse(BaseModel):
     id: UUID
     status: ResearchStatus
     message: str
+    query: str
+    """What the user typed.
+
+    Added in 14.9 (plan §2.15) because a run is now reachable at its own URL
+    by someone who did not start it — from history, from a bookmark, from a
+    reload. Such a page has no memory of the question, and a ranking whose
+    question is missing is a ranking of nothing in particular.
+    """
+    normalized_query: str | None = None
+    created_at: datetime | None = None
+    """When the run was started — the date a history entry is listed under."""
     statistics: dict[str, int]
     diagnostics: ResearchDiagnostics
     """What the run suppressed and why — exposed, not merely logged (plan §0.1 rule 2)."""
