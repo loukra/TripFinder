@@ -1,4 +1,8 @@
-.PHONY: db db-stop api worker web test lint typecheck stack
+.PHONY: db db-stop migrate api worker web test lint typecheck stack
+
+# `.env` is where OPENAI_API_KEY and SERPER_API_KEY live (see .env.example).
+# Compose reads it on its own; the native processes need it exported for them.
+LOAD_ENV = set -a; [ -f .env ] && . ./.env; set +a;
 
 db:
 	docker compose up -d postgres
@@ -6,9 +10,11 @@ db:
 db-stop:
 	docker compose stop postgres
 
-# `.env` is where OPENAI_API_KEY and SERPER_API_KEY live (see .env.example).
-# Compose reads it on its own; the native processes need it exported for them.
-LOAD_ENV = set -a; [ -f .env ] && . ./.env; set +a;
+# Nothing applies migrations on start-up, deliberately: a process that
+# migrates the database it happens to point at is a process that can rewrite
+# production by being started with the wrong URL. A fresh clone runs this once.
+migrate:
+	$(LOAD_ENV) cd backend && uv run alembic upgrade head
 
 api:
 	$(LOAD_ENV) cd backend && PYTHONPATH=src uv run uvicorn tripfinder.main:app --reload
