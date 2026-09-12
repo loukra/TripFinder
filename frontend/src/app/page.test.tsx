@@ -71,6 +71,60 @@ beforeEach(() => {
 });
 
 describe("Home page", () => {
+  // Summarization runs last, so every provisional snapshot carries
+  // `explanation: null` and only the final payload has the prose. If the
+  // page ever kept a snapshot after the run ended, the ranking would be
+  // right and the reasons would be permanently missing — which is exactly
+  // what it looks like from the outside when the grounding check has thrown
+  // the explanations away, and the two must not be confusable.
+  it("replaces a snapshot without explanations with the final one that has them", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
+    let current = statusResponse({ status: "analyzing", message: "Reading." });
+    vi.mocked(api.getResearch).mockImplementation(async () => current);
+
+    const snapshot: ResearchResultsResponse = {
+      ...resultsResponse,
+      status: "analyzing",
+      message: "Reading.",
+      provisional: true,
+      results: [{ ...resultsResponse.results[0], explanation: null }],
+    };
+    const settled: ResearchResultsResponse = {
+      ...resultsResponse,
+      status: "completed_partial",
+      message: "Stopped early on purpose.",
+      provisional: false,
+      results: [
+        {
+          ...resultsResponse.results[0],
+          explanation: "Travelers recommend Alaska for its untouched wilderness.",
+        },
+      ],
+    };
+    let payload = snapshot;
+    vi.mocked(api.getResults).mockImplementation(async () => payload);
+
+    render(<Home />);
+    await user.type(screen.getByRole("textbox"), "underrated states");
+    await user.click(screen.getByRole("button", { name: /search/i }));
+
+    // Mid-run: a ranking, and no reason for it yet.
+    await waitFor(() => expect(screen.getByText("Alaska")).toBeInTheDocument());
+    expect(
+      screen.queryByText("Travelers recommend Alaska for its untouched wilderness.")
+    ).not.toBeInTheDocument();
+
+    current = statusResponse({ status: "completed_partial", message: "Stopped early on purpose." });
+    payload = settled;
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Travelers recommend Alaska for its untouched wilderness.")
+      ).toBeInTheDocument()
+    );
+  });
+
   it("runs a search through to a completed results page", async () => {
     const user = userEvent.setup();
     vi.mocked(api.createResearch).mockResolvedValue({ id: "r1", status: "pending" });
