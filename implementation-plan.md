@@ -769,27 +769,7 @@ reach one. It is first because everything after it needs a way to show the user 
 the one they just started — a reused answer is useless if it cannot be opened, compared, or
 distrusted.
 
-**14.10 — knowing what a run costs.** Nothing in this codebase counts a token. `maxEstimatedCostUsd`
-has been in `ResearchBudget` since Phase 1 and is read by no line of code — a knob that lies, which
-is the same failure this plan forbids everywhere else. Measured across two real runs, the shape is
-already clear: 85–126 analysis calls against 3 342–3 996 comments, and every other step in the
-pipeline combined is about thirty calls. But *clear* is not *measured*, and a cost cannot be reduced,
-capped, or traded against latency until it is a number on the run.
-
-This phase makes it one, and then makes the dead knob real. It is deliberately **before** caching:
-caching's whole justification is that it saves money, and a phase that cannot measure its own effect
-has to be believed rather than checked.
-
-**A cap on LLM spend is possible, but not exactly.** No provider will say what a call costs before it
-is made. What is available is: the exact usage of every call *after* it returns, and a local token
-count of a prompt *before* it is sent. So the cap is enforced the way `maxResearchDuration` already
-is — as an admission rule, not a guarantee. Before each analysis batch, the estimated input cost plus
-the worst case for `maxOutputTokens` is checked against what is left in the purse; if it does not
-fit, the batch is never dispatched and the refusal is recorded. A run can overshoot by at most the
-one batch that was in flight, and it can never overshoot silently. This is the same shape as §2.12.2's
-admission deadline, and it belongs in the same purse.
-
-**14.11 — answering a question that has already been answered.** The reuse key is **not** the raw
+**14.10 — answering a question that has already been answered.** The reuse key is **not** the raw
 text: "best states for nature" and "Best states for nature?" are the same question and would miss
 each other. It is the **plan** — normalised query, scope, granularity, criteria — which Query
 Understanding produces anyway, for one call out of roughly a hundred and thirty. Paying one cheap
@@ -808,6 +788,30 @@ So two rules govern reuse, and they are not negotiable:
    finding; an answer from March presented as an answer from today is that same error with a longer
    fuse.
 2. **A fresh run is always one click away**, and it never consults the cache.
+
+This phase also records what each call spent, because that is what turns "the cache saves money"
+from an assertion into a reading. Nothing in this codebase counts a token today. The totals are the
+minimum needed to compare a hit against a miss; deciding what to *do* about the number is 14.11's
+job, not this one's.
+
+**14.11 — a cap on spend.** `maxEstimatedCostUsd` has been in `ResearchBudget` since Phase 1 and is
+read by no line of code — a knob that lies, which is the same failure this plan forbids everywhere
+else. Measured across two real runs the shape is already clear: 85–126 analysis calls against
+3 342–3 996 comments, and every other step combined is about thirty calls. This phase makes the knob
+real, and adds the provider-side prompt caching the analysis prefix is already shaped for — the
+instructions and plan are byte-identical across every batch of a run, and only the comments change.
+
+**A cap on LLM spend is possible, but not exactly.** No provider will say what a call costs before it
+is made. What is available is the exact usage of every call *after* it returns, and a local token
+count of a prompt *before* it is sent. So the cap is enforced the way `maxResearchDuration` already
+is — as an admission rule, not a guarantee. Before each analysis batch, the estimated input cost plus
+the worst case for `maxOutputTokens` is checked against what is left in the purse; if it does not
+fit, the batch is never dispatched and the refusal is recorded. A run can overshoot by at most the
+one batch that was in flight, and it can never overshoot silently. This is the same shape as §2.12.2's
+admission deadline, and it belongs in the same purse.
+
+It is **last** because a cap is a policy about a number, and the number arrives in 14.10. Ordering it
+earlier would mean choosing a limit before anything had measured what a run actually spends.
 
 
 ---
@@ -1349,8 +1353,8 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | **14.7** | **Streaming provisional results** | 14.6 | **§2.13. Snapshot function re-running steps 8-11 over the partial corpus with no model call, a snapshot emitted after every analysis batch (single-flight, coalesced, sequence-guarded), `analyzing` served by `/results` as `provisional` with `share: null` and the weak list alongside, a provisional results view that fills before it reorders** |
 | **14.8** | **Parallel strands** | 14.7 | **§2.14. One document = one strand, carried end to end and concurrently; shared budget and shared denominator replace the sequential step list for §4.6 steps 5-7; per-document comment cap; topical quota replaces polling-first ordering; health gate plus continuous reading; granularity-restricted analysis prompt** |
 | **14.9** | **Run history** | 14.8 | **§2.15. A list of past runs and a URL per run; the results a run already produced are reachable without re-running it** |
-| **14.10** | **What a run costs** | 14.9 | **§2.15. Token usage recorded per call and summed per run; `maxEstimatedCostUsd` enforced as an admission rule in the purse; provider-side prompt caching for the analysis prefix** |
-| **14.11** | **Answering a question once** | 14.10 | **§2.15. Reuse keyed on the research plan, not the raw text; six-month window; a reused answer is dated on the page and a fresh run is always available** |
+| **14.10** | **Answering a question once** | 14.9 | **§2.15. Reuse keyed on the research plan, not the raw text; six-month window; a reused answer is dated on the page and a fresh run is always available; token usage recorded per run, so the saving is read rather than claimed** |
+| **14.11** | **A cap on spend** | 14.10 | **§2.15. `maxEstimatedCostUsd` enforced as an admission rule in the purse; per-step cost attribution; provider-side prompt caching for the analysis prefix** |
 | 15 | Evaluation | 14.6, 14.7, 14.8, 14.10 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
@@ -1478,33 +1482,32 @@ newest first with their question, date and outcome, and distinguishes a `complet
 the same URL and shows its progress rather than a dead page; and the history page says plainly when
 it is empty rather than rendering as though it had failed to load.
 
-**Phase 14.10 — acceptance (§2.15):** every LLM call records the tokens it actually used; the run
-carries input-token, output-token and estimated-cost totals in `statistics`, and the estimate names
-the price table it used; per-step attribution is visible, so the claim that analysis dominates a run
-is read off the run rather than assumed; `maxEstimatedCostUsd` refuses to admit an analysis batch
+**Phase 14.10 — acceptance (§2.15):** a question whose plan matches a `completed` run inside the
+reuse window returns that run's answer without a discovery, retrieval or analysis call; a question
+worded differently but with an identical plan hits the same run, and one whose scope, granularity or
+criteria differ does not; a run older than the window is never reused; a reused answer is labelled
+with the date it was produced, everywhere that answer is shown, and a test proves the label cannot be
+absent; asking for a fresh run bypasses the cache entirely and produces a new run with its own id,
+leaving the old one intact in the history; a cache hit on a `completed_partial`, `failed` or
+`cancelled` run is refused — only a run that actually finished may answer for a later question; and
+every LLM call records the tokens it used and the run carries the totals in `statistics`, so the
+saving a hit produces is a number on the two runs rather than a claim about them.
+
+**Phase 14.11 — acceptance (§2.15):** `maxEstimatedCostUsd` refuses to admit an analysis batch
 whose estimated cost does not fit what is left in the purse, records the refusal as a suppression
 with its count and the limit that bound it, and yields `completed_partial` naming cost as the
 limiting factor — never `completed`; a test proves a run stopped by cost is distinguishable from one
 that genuinely found little (§0.1); a run that would exceed its cap by a single in-flight batch
-finishes that batch and dispatches no other; and prices live in config, never in `domain/`.
-
-**Phase 14.11 — acceptance (§2.15):** a question whose plan matches a `completed` run inside the
-reuse window returns that run's answer without a discovery, retrieval or analysis call, and the
-saving is visible — the reused question costs about one Query Understanding call against a full
-run's hundred and thirty; a question worded differently but with an identical plan hits the same
-run, and one whose scope, granularity or criteria differ does not; a run older than the window is
-never reused; a reused answer is labelled with the date it was produced, everywhere that answer is
-shown, and a test proves the label cannot be absent; asking for a fresh run bypasses the cache
-entirely and produces a new run with its own id, leaving the old one intact in the history; and a
-cache hit on a `completed_partial`, `failed` or `cancelled` run is refused — only a run that
-actually finished may answer for a later question.
+finishes that batch and dispatches no other; per-step cost attribution is visible, so the claim that
+analysis dominates a run is read off the run rather than assumed; and prices live in config, never in
+`domain/`.
 
 ---
 
 ## 11. API surface
 
 ```
-POST   /api/research                    -> {id, status}   (14.11: may answer from a previous run;
+POST   /api/research                    -> {id, status}   (14.10: may answer from a previous run;
                                            `fresh=true` never does)
 GET    /api/research                    -> 14.9: past runs, newest first, paginated
 GET    /api/research/{id}               -> status, progress, statistics, budget used
