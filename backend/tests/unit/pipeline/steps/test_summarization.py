@@ -23,7 +23,14 @@ from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.analysis.comment_analysis import EntityMention
 from tripfinder.analysis.entity_resolution import ResolvedMention
 from tripfinder.analysis.summarization import EntitySummary, EntitySummaryBatch
-from tripfinder.domain.models import Entity, EntityType, Result, Stance, SuppressionReason
+from tripfinder.domain.models import (
+    Entity,
+    EntityType,
+    ResearchStatus,
+    Result,
+    Stance,
+    SuppressionReason,
+)
 from tripfinder.domain.ports import LLMProvider
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.steps.summarization import SummarizationStep
@@ -504,3 +511,60 @@ class TestASuppressedExplanationIsDistinguishableFromAMissingOne:
         assert context.research.statistics["results_without_evidence"] == 1
         assert context.research.statistics["summarization_fabricated_quote"] == 1
         assert context.research.statistics["results_explained"] == 0
+
+
+class TestATerminalStatusMeansTheRecordIsComplete:
+    """Plan §7.1, and the reason this step publishes the status at all.
+
+    The worker persists the whole research after every step, and every client
+    stops polling the moment a status goes terminal. So a terminal status
+    written one step early is not a cosmetic ordering detail — it is the
+    version of the record the user keeps. Aggregation used to write it, and
+    a run spent the whole length of its summarization call offering a
+    complete ranking with no reasons under it, which looks exactly like a run
+    whose explanations were all discarded.
+    """
+
+    async def test_the_status_goes_terminal_only_once_the_explanations_are_on(self) -> None:
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM([EntitySummaryBatch(items=[_summary(ALASKA)])]),
+        )
+        context.data["terminal_status"] = ResearchStatus.COMPLETED_PARTIAL
+        assert context.research.status is ResearchStatus.RETRIEVING
+
+        settled = await SummarizationStep().run(context)
+
+        assert settled.research.status is ResearchStatus.COMPLETED_PARTIAL
+        assert settled.research.results[0].explanation is not None
+
+    async def test_a_discarded_explanation_still_settles_the_run(self) -> None:
+        """The guarantee is about ordering, not about success. A run whose
+        explanation was genuinely refused must still reach a terminal status,
+        or it would hang forever on the one failure §0.1 most wants visible."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=("invented",))])]
+            ),
+        )
+        context.data["terminal_status"] = ResearchStatus.COMPLETED
+
+        await SummarizationStep().run(context)
+
+        assert context.research.status is ResearchStatus.COMPLETED
+        assert context.research.results[0].explanation is None
+
+    async def test_a_step_run_with_no_verdict_parked_invents_none(self) -> None:
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM([EntitySummaryBatch(items=[_summary(ALASKA)])]),
+        )
+        before = context.research.status
+
+        await SummarizationStep().run(context)
+
+        assert context.research.status is before

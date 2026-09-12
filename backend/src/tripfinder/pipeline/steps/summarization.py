@@ -40,7 +40,12 @@ from tripfinder.analysis.summarization import (
     EntitySummaryBatch,
     build_summarization_prompt,
 )
-from tripfinder.domain.models import Result, Stance, SuppressionReason
+from tripfinder.domain.models import (
+    ResearchStatus,
+    Result,
+    Stance,
+    SuppressionReason,
+)
 from tripfinder.pipeline.base import PipelineContext
 
 logger = logging.getLogger(__name__)
@@ -167,7 +172,27 @@ class SummarizationStep:
             fabricated=len(fabricated_ids),
             discarded=discarded,
         )
+        self._settle(context)
         return context
+
+    @staticmethod
+    def _settle(context: PipelineContext) -> None:
+        """Publish the terminal status Aggregation decided on (plan §7.1).
+
+        The last act of the last step, because that is what a terminal status
+        means: the record is complete and nothing further will be added to
+        it. Aggregation used to set it itself, back when it was last; after
+        Summarization moved in behind it, every run spent the length of a
+        summarization call advertising itself as finished while its results
+        still had no explanations — and a client stops polling the moment a
+        status goes terminal, so that was the version it kept.
+
+        A context with nothing parked is a test exercising this step alone,
+        and leaving its status untouched is the honest answer there.
+        """
+        settled = context.data.get("terminal_status")
+        if isinstance(settled, ResearchStatus):
+            context.research.status = settled
 
     def _collect_evidence(self, context: PipelineContext) -> dict[str, list[str]]:
         """Verified quotes behind each entity's *counted*, positive opinions.
