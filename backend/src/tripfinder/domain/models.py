@@ -623,3 +623,30 @@ object that must not exist.
 def is_halting(status: ResearchStatus) -> bool:
     """Whether the pipeline must stop rather than run its remaining steps."""
     return status in HALTING_STATUSES
+
+
+REUSABLE_STATUSES: frozenset[ResearchStatus] = frozenset(
+    {
+        ResearchStatus.COMPLETED,
+        # A run stopped by its own duration budget (plan §2.12.2). It read
+        # what it read properly; the corpus is a real but incomplete
+        # sample, and saying so is what `completed_partial` is *for*.
+        ResearchStatus.COMPLETED_PARTIAL,
+    }
+)
+"""Runs whose answer may be shown for a later asking of the same question (plan §2.15).
+
+Here rather than in the step that applies it, because the repository has to
+find such a run and the step has to accept one, and a rule stated twice is a
+rule that drifts — leaving rows that are findable but unusable, or worse, the
+other way round.
+
+§2.15's acceptance said ``completed`` alone until it was measured (§2.15.2):
+no real run has ever reached it, because every one stops at the duration
+budget. The distinction that matters is not "finished" but "was this a real
+reading?" — and everything absent from this set is absent for a reason §7.1
+already states. ``completed_degraded`` had an unhealthy source and no
+trustworthy denominator (§8.1 rule 2); ``failed`` and ``source_unavailable``
+have no corpus at all; ``cancelled`` was stopped part-way by a person, and
+its snapshot is display state, never a run's answer (§2.13.2).
+"""

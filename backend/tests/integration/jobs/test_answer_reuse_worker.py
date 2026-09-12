@@ -22,6 +22,7 @@ from tripfinder.domain.models import (
     EntityType,
     GeoScope,
     Research,
+    ResearchFlag,
     ResearchPlan,
     ResearchStatus,
     Result,
@@ -70,7 +71,15 @@ class _UnderstandsTheQuestion:
 
 
 class _DoesTheExpensiveWork:
-    """Everything reuse is meant to avoid, compressed into one step."""
+    """Everything reuse is meant to avoid, compressed into one step.
+
+    It ends at ``completed_partial`` with ``budget_limit_reached``, which is
+    how **every** real run of this pipeline ends: 14.8 raised each budget
+    past what three minutes can consume, deliberately, so the clock is what
+    stops a run (§2.12.2). A test that ended at ``completed`` would be
+    testing a state this product does not reach — which is exactly how the
+    first version of this phase shipped a cache that could never fire.
+    """
 
     name = "parallel_strands"
 
@@ -79,7 +88,8 @@ class _DoesTheExpensiveWork:
             context.usage.record(None)
         context.research.results = [ANSWER]
         context.research.statistics = {"posts_analyzed": 27}
-        context.research.status = ResearchStatus.COMPLETED
+        context.research.diagnostics.flags.append(ResearchFlag.BUDGET_LIMIT_REACHED)
+        context.research.status = ResearchStatus.COMPLETED_PARTIAL
         return context
 
 
@@ -151,7 +161,7 @@ async def test_the_second_asking_is_answered_from_the_first(
 ) -> None:
     compose(True)
     first = await _ask(session_factory, created_at=datetime.now(UTC), query="quiet national parks")
-    assert first.status is ResearchStatus.COMPLETED
+    assert first.status is ResearchStatus.COMPLETED_PARTIAL
     assert first.statistics["llm_calls"] == 131
 
     compose(False)
@@ -161,7 +171,10 @@ async def test_the_second_asking_is_answered_from_the_first(
         query="which national parks have the fewest crowds",
     )
 
-    assert second.status is ResearchStatus.COMPLETED
+    # The answer it is showing was cut short by the clock, and this run
+    # says so in the same words the run that produced it used (§0.1 rule 4).
+    assert second.status is ResearchStatus.COMPLETED_PARTIAL
+    assert ResearchFlag.BUDGET_LIMIT_REACHED in second.diagnostics.flags
     assert second.id != first.id
     assert [result.entity_name for result in second.results] == ["Great Basin"]
     assert second.reused is not None
@@ -225,7 +238,7 @@ async def test_a_fresh_run_does_the_work_again_and_leaves_the_old_one_alone(
     async with session_factory() as session:
         reread = await ResearchRepository(session).get(first.id)
     assert reread is not None
-    assert reread.status is ResearchStatus.COMPLETED
+    assert reread.status is ResearchStatus.COMPLETED_PARTIAL
 
 
 async def test_an_answer_past_the_window_is_paid_for_again(

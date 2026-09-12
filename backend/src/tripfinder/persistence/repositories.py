@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.domain.config import ResearchConfig
 from tripfinder.domain.models import (
+    REUSABLE_STATUSES,
     ClarificationRequest,
     PendingPlan,
     Research,
@@ -192,13 +193,15 @@ class ResearchRepository:
     ) -> Research | None:
         """The newest run carrying this reuse key inside the window (plan §2.15).
 
-        ``completed`` and "not itself a reuse" are in the query rather than
-        left to the caller, and neither is policy: without them the newest
-        matching row wins, so a question asked twice this morning would be
-        offered yesterday's good answer only when this morning's failure did
-        not exist. They narrow *which* row comes back. Whether it may be
-        used is re-decided by ``AnswerReuseStep`` against the run itself,
-        where the rules are readable without a database.
+        The status filter and "not itself a reuse" are in the query rather
+        than left to the caller, and neither is policy: without them the
+        newest matching row wins, so a question asked twice this morning
+        would be offered yesterday's good answer only when this morning's
+        failure did not exist. They narrow *which* row comes back. Whether
+        it may be used is re-decided by ``AnswerReuseStep`` against the run
+        itself, from the same ``REUSABLE_STATUSES`` — one list, imported
+        here rather than restated, so the query and the rule cannot drift
+        apart and leave a run that is findable but unusable.
         """
         row = (
             await self._session.execute(
@@ -206,7 +209,9 @@ class ResearchRepository:
                 .where(
                     ResearchRow.plan_fingerprint == fingerprint,
                     ResearchRow.created_at >= not_before,
-                    ResearchRow.status == ResearchStatus.COMPLETED.value,
+                    ResearchRow.status.in_(
+                        [status.value for status in REUSABLE_STATUSES]
+                    ),
                     ResearchRow.reused.is_(None),
                 )
                 .order_by(ResearchRow.created_at.desc(), ResearchRow.id.desc())

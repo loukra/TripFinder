@@ -14,13 +14,24 @@ Four rules decide whether a stored run may answer, and each one exists
 because the alternative would put a wrong or misleading number in front of
 somebody:
 
-1. **Only ``completed``.** A ``completed_partial``, ``completed_degraded``,
-   ``failed``, ``cancelled`` or ``source_unavailable`` run is never reused.
-   Plan §7.1 gives each of those its own wording because each describes a
-   run that did not read what it set out to read; copying one forward would
-   spread a single bad afternoon across every later asking of the question,
-   and — worse — §0.1 rule 4 would then be broken at a distance, since the
-   copy has no way to say that *its own* corpus was fine.
+1. **The run read its corpus properly.** ``completed`` and
+   ``completed_partial`` qualify; ``completed_degraded``, ``failed``,
+   ``cancelled`` and ``source_unavailable`` never do.
+
+   §2.15's acceptance originally said ``completed`` alone, and that was
+   amended after it was measured (§2.15.2): since the streaming pipeline
+   landed, **no real run has ever reached** ``completed`` — every one stops
+   at the duration budget as ``completed_partial`` with
+   ``budget_limit_reached``. The rule as written made reuse a feature that
+   could not fire.
+
+   The distinction that matters is not "finished" but "was this a real
+   reading?", and §2.12.2 already answers it for a budget-limited run:
+   *what was read was read properly, and the corpus is a real but
+   incomplete sample*. A degraded run is the opposite — §8.1 suppressed its
+   percentages because the source was unhealthy — and a failed, cancelled
+   or unreachable one never had a corpus at all.
+
 2. **Inside the window.** ``ReuseConfig.window_days``, measured from the
    stored run's ``created_at``.
 3. **Never a reuse of a reuse.** A run that was itself answered from the
@@ -30,10 +41,16 @@ somebody:
 4. **Only if this run is allowed to.** ``ReuseConfig.enabled`` is off for a
    run created with ``fresh=true``, and then this step looks nothing up.
 
-On a hit the answer is copied whole — results, weak results, statistics and
-diagnostics — because those describe *the answer*, not the copying. The
-statistics say the answer came from 38 discussions because it did; what this
-run spent is written over the top of them by the runner, from the token
+On a hit the answer is copied whole — results, weak results, statistics,
+diagnostics **and the status** — because those describe *the answer*, not
+the copying. The status especially: a partial answer reused under
+``completed`` would be §0.1 rule 4 committed by a step whose whole job is to
+stop old answers from looking new. So a reused partial is itself
+``completed_partial``, says §7.1's partial sentence, and carries the same
+flags. Nothing is laundered by being copied.
+
+The statistics say the answer came from 38 discussions because it did; what
+this run spent is written over the top of them by the runner, from the token
 ledger, so a hit and a miss can be compared as two numbers rather than two
 claims (plan §2.15).
 """
@@ -44,9 +61,9 @@ import logging
 from datetime import timedelta
 
 from tripfinder.domain.models import (
+    REUSABLE_STATUSES,
     Research,
     ResearchPlan,
-    ResearchStatus,
     ReusedAnswer,
 )
 from tripfinder.domain.reuse import plan_fingerprint
@@ -99,7 +116,7 @@ def _may_answer(prior: Research, *, for_research: Research) -> bool:
     """Whether a stored run is allowed to answer for this one (rules 1 and 3 above)."""
     if prior.id == for_research.id:
         return False
-    if prior.status is not ResearchStatus.COMPLETED:
+    if prior.status not in REUSABLE_STATUSES:
         return False
     return prior.reused is None
 
@@ -117,4 +134,7 @@ def _copy_answer(prior: Research, *, onto: Research) -> None:
     onto.diagnostics = prior.diagnostics.model_copy(deep=True)
     onto.normalized_query = prior.normalized_query
     onto.reused = ReusedAnswer(research_id=prior.id, answered_at=prior.created_at)
-    onto.status = ResearchStatus.COMPLETED
+    # The source's status, never ``completed``. A partial answer relabelled
+    # as a finished one would describe a degraded outcome in the words of a
+    # genuine one — §0.1 rule 4 — and it would be this step that did it.
+    onto.status = prior.status

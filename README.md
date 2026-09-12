@@ -63,8 +63,12 @@ question *means* rather than how it was typed — so "best states for nature" an
 nature?" land on the same answer — and if a finished run answered it within the last six months,
 that run's counts are shown instead of a hundred and thirty more model calls being spent. The
 answer always says the date it was produced, wherever it appears, and **"Research it again" is
-always one click away and never looks at the cache**. Only a run that actually finished may answer
-for a later question: a run cut short, degraded or cancelled never does.
+always one click away and never looks at the cache**.
+
+Only a run that read its corpus properly may answer for a later question. A run stopped by its own
+time budget qualifies — it read what it read properly, and it stays labelled as partial when it is
+reused, rather than being quietly promoted to "finished". A run whose source was unhealthy, or that
+failed or was cancelled, never answers for anything.
 
 ---
 

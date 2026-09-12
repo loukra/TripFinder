@@ -14,6 +14,7 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tripfinder.domain.models import (
+    REUSABLE_STATUSES,
     EntityType,
     GeoScope,
     Research,
@@ -137,16 +138,66 @@ async def test_a_run_outside_the_window_is_not_found(
     assert found is None
 
 
-async def test_an_unfinished_run_is_not_found(
+async def test_a_budget_limited_run_is_found(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """§2.15.2: the query and ``REUSABLE_STATUSES`` are one list, not two."""
     await _persist(session_factory, _research(status=ResearchStatus.COMPLETED_PARTIAL))
 
     found = await SqlAnswerArchive(session_factory).find_by_fingerprint(
         fingerprint=plan_fingerprint(_plan()), not_before=NOW - timedelta(days=183)
     )
 
+    assert found is not None
+    assert found.status is ResearchStatus.COMPLETED_PARTIAL
+
+
+async def test_a_degraded_run_is_not_found(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _persist(session_factory, _research(status=ResearchStatus.COMPLETED_DEGRADED))
+
+    found = await SqlAnswerArchive(session_factory).find_by_fingerprint(
+        fingerprint=plan_fingerprint(_plan()), not_before=NOW - timedelta(days=183)
+    )
+
     assert found is None
+
+
+async def test_a_cancelled_run_is_not_found(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _persist(session_factory, _research(status=ResearchStatus.CANCELLED))
+
+    found = await SqlAnswerArchive(session_factory).find_by_fingerprint(
+        fingerprint=plan_fingerprint(_plan()), not_before=NOW - timedelta(days=183)
+    )
+
+    assert found is None
+
+
+async def test_every_reusable_status_is_findable(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Whatever ``REUSABLE_STATUSES`` grows to, the query has to agree with it.
+
+    The two used to be written out separately, which is how a row ends up
+    findable but unusable — or, worse, the other way round.
+    """
+    # A key of its own per status, so each lookup can only return the row
+    # it is about — no tie-breaking, no ordering, nothing to misread.
+    for status in REUSABLE_STATUSES:
+        plan = _plan(criteria=[status.value])
+        await _persist(
+            session_factory, _research(status=status, plan=plan, query=status.value)
+        )
+
+        found = await SqlAnswerArchive(session_factory).find_by_fingerprint(
+            fingerprint=plan_fingerprint(plan), not_before=NOW - timedelta(days=183)
+        )
+
+        assert found is not None, status
+        assert found.status is status
 
 
 async def test_a_run_that_was_itself_reusing_is_not_found(

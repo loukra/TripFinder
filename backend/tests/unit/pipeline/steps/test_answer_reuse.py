@@ -21,6 +21,7 @@ from tripfinder.domain.models import (
     FailureKind,
     GeoScope,
     Research,
+    ResearchFlag,
     ResearchPlan,
     ResearchStatus,
     Result,
@@ -236,25 +237,55 @@ async def test_the_window_is_config_and_the_step_asks_within_it() -> None:
     assert archive.asked == [(plan_fingerprint(_plan()), NOW - timedelta(days=7))]
 
 
-async def test_a_partial_run_may_not_answer_for_a_later_question() -> None:
-    """Plan §7.1 gives ``completed_partial`` its own wording for a reason.
+async def test_a_budget_limited_run_may_answer_for_a_later_question() -> None:
+    """Amended in §2.15.2, after measuring.
 
-    A copy of it cannot say that *its own* corpus was cut short, so reusing
-    one would spread a single bad afternoon across every later asking —
-    §0.1 rule 4 broken at a distance.
+    The original rule was ``completed`` alone. No real run has ever reached
+    it — every one stops at the duration budget — so reuse could not fire.
+    §2.12.2 already says what such a run is: *what was read was read
+    properly, and the corpus is a real but incomplete sample*.
     """
     stored = _stored_answer(status=ResearchStatus.COMPLETED_PARTIAL)
 
     context = await AnswerReuseStep().run(_context(archive=_Archive(stored)))
 
-    assert context.answered is False
-    assert context.research.results == []
+    assert context.answered is True
+    assert [result.entity_name for result in context.research.results] == ["Great Basin"]
+
+
+async def test_a_reused_partial_answer_is_still_called_partial() -> None:
+    """The §0.1 rule 4 test for this step, and the reason it copies the status.
+
+    Relabelling a budget-limited answer as ``completed`` on the way through
+    would be a degraded outcome described in the words of a genuine one —
+    committed by the one step whose job is to stop old answers looking new.
+    """
+    stored = _stored_answer(status=ResearchStatus.COMPLETED_PARTIAL)
+    stored.diagnostics.flags.append(ResearchFlag.BUDGET_LIMIT_REACHED)
+
+    context = await AnswerReuseStep().run(_context(archive=_Archive(stored)))
+
+    assert context.research.status is ResearchStatus.COMPLETED_PARTIAL
+    assert ResearchFlag.BUDGET_LIMIT_REACHED in context.research.diagnostics.flags
+
+
+async def test_a_reused_finished_answer_stays_finished() -> None:
+    """The copy takes the source's status — it does not downgrade either."""
+    context = await AnswerReuseStep().run(_context(archive=_Archive(_stored_answer())))
+
+    assert context.research.status is ResearchStatus.COMPLETED
 
 
 async def test_a_degraded_run_may_not_answer_for_a_later_question() -> None:
+    """The opposite of a budget-limited run: §8.1 suppressed its percentages
+    because the source was unhealthy, so there is no trustworthy denominator
+    to hand forward."""
     stored = _stored_answer(status=ResearchStatus.COMPLETED_DEGRADED)
 
-    assert (await AnswerReuseStep().run(_context(archive=_Archive(stored)))).answered is False
+    result = await AnswerReuseStep().run(_context(archive=_Archive(stored)))
+
+    assert result.answered is False
+    assert result.research.results == []
 
 
 async def test_a_cancelled_run_may_not_answer_for_a_later_question() -> None:
