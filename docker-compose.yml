@@ -24,6 +24,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-fake}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,6 +38,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tripfinder}:${POSTGRES_PASSWORD:-tripfinder}@postgres:5432/${POSTGRES_DB:-tripfinder}
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-fake}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
