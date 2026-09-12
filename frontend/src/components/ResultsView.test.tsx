@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResultsView } from "./ResultsView";
 import * as api from "@/lib/api";
@@ -50,6 +50,35 @@ function makeData(overrides: Partial<ResearchResultsResponse> = {}): ResearchRes
 }
 
 describe("ResultsView", () => {
+  // The written reason a place is in the top five. It comes from
+  // Summarization (plan §4.6 step 13) and is the only prose on the page that
+  // says *why* — and it is null far more often than it should be, because
+  // the grounding check has twice rejected the model's own citations over
+  // formatting. Nothing asserted it reached the screen until now.
+  it("prints the explanation under the result it belongs to", () => {
+    render(<ResultsView researchId="r1" data={makeData()} />);
+
+    const alaska = screen.getByText("Alaska").closest("li")!;
+    expect(
+      within(alaska).getByText("Frequently cited for untouched wilderness.")
+    ).toBeInTheDocument();
+  });
+
+  it("leaves no empty paragraph for a result that has no explanation", () => {
+    const { container } = render(<ResultsView researchId="r1" data={makeData()} />);
+
+    // Two results, one of them with `explanation: null`.
+    expect(container.querySelectorAll(".result-explanation")).toHaveLength(1);
+  });
+
+  it("shows the explanation on a provisional ranking too", () => {
+    render(<ResultsView researchId="r1" data={makeData({ provisional: true })} />);
+
+    expect(
+      screen.getByText("Frequently cited for untouched wilderness.")
+    ).toBeInTheDocument();
+  });
+
   it("shows the exact percentage label and denominator wording", () => {
     render(<ResultsView researchId="r1" data={makeData()} />);
 
@@ -230,15 +259,20 @@ describe("ResultsView, while a run is still counting", () => {
     expect(screen.queryByText(/Percentages are withheld for this run/)).not.toBeInTheDocument();
   });
 
-  it("shows no rank badge while the order can still change", () => {
+  // The provisional ranking is drawn as the finished one: same rows, same
+  // ranks, same position on the page, with the banner — not a different
+  // layout — carrying the claim that it is still moving (plan §2.13.1: an
+  // order that may still change is honest under an explicit label).
+  it("ranks the list as the finished view does, under a provisional label", () => {
     const data = makeProvisional({
       results: [makeResult({ entity_id: "state:alaska", entity_name: "Alaska", supporter_count: 6 })],
     });
 
     render(<ResultsView researchId="r1" data={data} />);
 
-    expect(screen.getByRole("heading", { name: /ahead so far/i })).toBeInTheDocument();
-    expect(screen.queryByText("#1")).not.toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText(/provisional result/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /ahead so far/i })).not.toBeInTheDocument();
   });
 
   it("says nothing has been counted yet when nothing has", () => {
@@ -249,7 +283,10 @@ describe("ResultsView, while a run is still counting", () => {
     expect(screen.getByText(/nothing counted yet/i)).toBeInTheDocument();
   });
 
-  it("holds a reorder while a row is being read, and applies it afterwards", async () => {
+  it("keeps updating while the pointer rests on the list", async () => {
+    // The first version of the hold froze on hover, so a pointer left
+    // anywhere on the list stopped the page — under a banner still
+    // promising the numbers were growing.
     const user = userEvent.setup();
     const vermont = makeResult({ supporter_count: 2 });
     const maine = makeResult({
@@ -262,19 +299,57 @@ describe("ResultsView, while a run is still counting", () => {
     );
 
     await user.hover(screen.getByText("Vermont").closest("li")!);
-    // A new snapshot arrives with Maine ahead — the reader is mid-row, so the
-    // list must not move under them yet.
-    const reordered = makeProvisional({
-      weak_results: [{ ...maine, supporter_count: 9 }, vermont],
-    });
-    rerender(<ResultsView researchId="r1" data={reordered} />);
-
-    expect(namesInOrder()).toEqual(["Vermont", "Maine"]);
-
-    await user.unhover(screen.getByText("Vermont").closest("li")!);
-    rerender(<ResultsView researchId="r1" data={reordered} />);
+    rerender(
+      <ResultsView
+        researchId="r1"
+        data={makeProvisional({ weak_results: [{ ...maine, supporter_count: 9 }, vermont] })}
+      />
+    );
 
     expect(namesInOrder()).toEqual(["Maine", "Vermont"]);
+  });
+
+  it("shows the finished answer even while evidence is open", async () => {
+    // The defect this exists to prevent: a run finished at 66 supporters
+    // while the page went on showing a provisional 32 and "still counting",
+    // because an open panel held the view past the end of the run. A view
+    // that withholds the finished result is worse than one that reorders.
+    const user = userEvent.setup();
+    vi.mocked(api.getEvidence).mockResolvedValue({
+      entity_id: "state:vermont",
+      entity_name: "Vermont",
+      total: 0,
+      limit: 10,
+      offset: 0,
+      permalinks: [],
+    });
+    const { rerender } = render(
+      <ResultsView
+        researchId="r1"
+        data={makeProvisional({ weak_results: [makeResult({ supporter_count: 32 })] })}
+      />
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "View evidence" })[0]);
+    expect(screen.getByText(/still counting/i)).toBeInTheDocument();
+
+    rerender(
+      <ResultsView
+        researchId="r1"
+        data={{
+          ...makeProvisional(),
+          status: "completed_partial",
+          provisional: false,
+          percentages_suppressed: false,
+          results: [makeResult({ supporter_count: 66, share: 0.103 })],
+          weak_results: [],
+        }}
+      />
+    );
+
+    expect(screen.getByText("66")).toBeInTheDocument();
+    expect(screen.queryByText("32")).not.toBeInTheDocument();
+    expect(screen.queryByText(/still counting/i)).not.toBeInTheDocument();
   });
 
   it("holds a reorder while an evidence panel is open, even after the mouse leaves", async () => {

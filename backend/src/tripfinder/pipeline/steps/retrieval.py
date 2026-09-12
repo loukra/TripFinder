@@ -31,6 +31,7 @@ from tripfinder.domain.models import (
 )
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import SourceHealthRecorder, get_recorder
+from tripfinder.pipeline.selection import best_comments
 from tripfinder.sources.failures import failure_kind
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ class ContentRetrievalStep:
     async def run(self, context: PipelineContext) -> PipelineContext:
         polling_documents: list[SourceDocument] = context.data.get("polling_documents", [])
         topical_documents: list[SourceDocument] = context.data.get("topical_documents", [])
-        max_comments = context.research.research_config.budget.max_comments
+        budget = context.research.research_config.budget
+        max_comments = budget.max_comments
+        max_per_document = budget.max_comments_per_document
         diagnostics = context.research.diagnostics
         recorder = get_recorder(context)
 
@@ -53,6 +56,7 @@ class ContentRetrievalStep:
         topical_comments: list[Comment] = []
         documents_retrieved = 0
         comments_dropped_for_budget = 0
+        comments_dropped_per_document = 0
         documents_unvisited = 0
 
         # Polling first, always: topical threads spend only leftover budget.
@@ -64,10 +68,20 @@ class ContentRetrievalStep:
                 documents_unvisited = len(queue) - index
                 break
 
-            fetched = await self._fetch(context, document, recorder=recorder)
+            fetched = await fetch_comments(
+                context, document, recorder=recorder, step_name=self.name
+            )
             if fetched is None:
                 continue
             documents_retrieved += 1
+
+            # Breadth before depth (plan §2.14.2). Without this the queue is
+            # drained document by document and the budget is gone before
+            # most threads are opened.
+            capped = best_comments(fetched, max_per_document)
+            if len(capped) < len(fetched):
+                comments_dropped_per_document += len(fetched) - len(capped)
+            fetched = capped
 
             for comment in fetched:
                 if comment.id in seen_comment_ids:
@@ -85,6 +99,13 @@ class ContentRetrievalStep:
 
         # Two different units, so two entries: a suppression's count must
         # mean one thing.
+        if comments_dropped_per_document:
+            diagnostics.record_suppression(
+                step=self.name,
+                reason=SuppressionReason.BUDGET_MAX_COMMENTS,
+                count=comments_dropped_per_document,
+                detail=f"comments beyond each document's cap of {max_per_document}",
+            )
         if comments_dropped_for_budget:
             diagnostics.record_suppression(
                 step=self.name,
@@ -115,33 +136,41 @@ class ContentRetrievalStep:
         context.research.status = ResearchStatus.ANALYZING
         return context
 
-    async def _fetch(
-        self,
-        context: PipelineContext,
-        document: SourceDocument,
-        *,
-        recorder: SourceHealthRecorder,
-    ) -> Sequence[Comment] | None:
-        """One comment-tree fetch. ``None`` means the call failed and was recorded."""
-        adapter = context.source.name
-        try:
-            comments = await context.source.fetch_comments(document)
-        except Exception as exc:  # one bad thread must not end the retrieval pass
-            kind = failure_kind(exc)
-            logger.warning(
-                "retrieval: %s failed to fetch comments for %s (%s): %s",
-                adapter,
-                document.id,
-                kind,
-                exc,
-            )
-            recorder.record_failure(adapter, kind=kind)
-            context.research.diagnostics.record_suppression(
-                step=self.name,
-                reason=SuppressionReason.RETRIEVAL_SOURCE_FAILURE,
-                count=1,
-                detail=kind,
-            )
-            return None
-        recorder.record_success(adapter)
-        return comments
+
+async def fetch_comments(
+    context: PipelineContext,
+    document: SourceDocument,
+    *,
+    recorder: SourceHealthRecorder,
+    step_name: str,
+) -> Sequence[Comment] | None:
+    """One comment-tree fetch. ``None`` means the call failed and was recorded.
+
+    Module-level rather than a method, because 14.8's strands fetch the same
+    way and must record a failure the same way (plan §2.14.2). A second
+    implementation would be a second set of §8.1 accounting rules, and the
+    one thing §0.1 cannot survive is evidence going missing quietly in only
+    one of them.
+    """
+    adapter = context.source.name
+    try:
+        comments = await context.source.fetch_comments(document)
+    except Exception as exc:  # one bad thread must not end the retrieval pass
+        kind = failure_kind(exc)
+        logger.warning(
+            "retrieval: %s failed to fetch comments for %s (%s): %s",
+            adapter,
+            document.id,
+            kind,
+            exc,
+        )
+        recorder.record_failure(adapter, kind=kind)
+        context.research.diagnostics.record_suppression(
+            step=step_name,
+            reason=SuppressionReason.RETRIEVAL_SOURCE_FAILURE,
+            count=1,
+            detail=kind,
+        )
+        return None
+    recorder.record_success(adapter)
+    return comments

@@ -8,6 +8,7 @@ topic (plan §0.1).
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -36,7 +37,7 @@ from tripfinder.domain.ports import (
 )
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.health import assess_source_health, get_recorder, terminal_status
-from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
+from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep, discover_documents
 
 THREAD_URL = "https://www.reddit.com/r/travel/comments/{post_id}/a_thread_title/"
 
@@ -104,6 +105,18 @@ class _CountingSearch:
     async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
         self.queries.append(query.query)
         return [_hit(f"doc{len(self.queries)}")]
+
+
+class _SlowSearch(_CountingSearch):
+    """Takes a measurable amount of time, so concurrency is observable."""
+
+    def __init__(self, *, delay: float) -> None:
+        super().__init__()
+        self._delay = delay
+
+    async def search(self, query: WebSearchQuery) -> Sequence[WebSearchHit]:
+        await asyncio.sleep(self._delay)
+        return await super().search(query)
 
 
 class _SearchWithSecret(_CountingSearch):
@@ -216,9 +229,15 @@ class _SpyLLM:
 
 def _turns(*queries: str) -> list[DiscoveryTurnResponse]:
     return [
-        DiscoveryTurnResponse(should_continue=True, next_query=query, reasoning="fresh angle")
+        DiscoveryTurnResponse(should_continue=True, next_queries=[query], reasoning="fresh angle")
         for query in queries
     ]
+
+
+def _batch(*queries: str) -> DiscoveryTurnResponse:
+    return DiscoveryTurnResponse(
+        should_continue=True, next_queries=list(queries), reasoning="several angles at once"
+    )
 
 
 def _stop() -> DiscoveryTurnResponse:
@@ -325,6 +344,145 @@ class TestTheLoopStaysInsideItsBudget:
         assert result.data["discovery_queries_issued"] == ["first angle"]
 
 
+class TestATurnProposesABatch:
+    """One query per turn made the model the serial part of a concurrent
+    pipeline: a measured run left roughly two thirds of the analysis window
+    idle, waiting for documents nobody had searched for yet."""
+
+    async def test_the_queries_of_one_turn_are_searched_concurrently(self) -> None:
+        search = _SlowSearch(delay=0.05)
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    _batch(
+                        "most underrated state for nature",
+                        "favourite state for hiking",
+                        "which state has the best wilderness",
+                    ),
+                    _stop(),
+                ]
+            }
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            budget=ResearchBudget(max_search_queries=10, search_queries_per_turn=3),
+        )
+
+        started = datetime.now(UTC)
+        await AgenticDiscoveryStep().run(context)
+        elapsed = (datetime.now(UTC) - started).total_seconds()
+
+        assert len(search.queries) == 3
+        # Three 50 ms searches, one after another, cannot finish in 100 ms.
+        assert elapsed < 0.1
+
+    async def test_the_cap_counts_queries_not_turns(self) -> None:
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    _batch("first angle here", "second angle here", "third angle here"),
+                    _stop(),
+                ]
+            }
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            budget=ResearchBudget(max_search_queries=2, search_queries_per_turn=5),
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == ["first angle here", "second angle here"]
+
+    async def test_two_near_duplicates_in_one_breath_cost_one_search(self) -> None:
+        """The duplicate rule held against history; a batch can repeat itself."""
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    _batch("underrated us national parks", "US underrated national parks"),
+                    _stop(),
+                ]
+            }
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            budget=ResearchBudget(max_search_queries=5, search_queries_per_turn=5),
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == ["underrated us national parks"]
+
+    async def test_a_turn_of_nothing_but_duplicates_is_an_unproductive_turn(self) -> None:
+        repeat = "underrated us national parks"
+        search = _CountingSearch()
+        llm = FakeLLMProvider(
+            {
+                DiscoveryTurnResponse: [
+                    _batch(repeat),
+                    _batch(repeat, repeat),
+                    _batch(repeat, repeat),
+                    _batch(repeat, repeat),
+                    _batch(repeat, repeat),
+                ]
+            }
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            budget=ResearchBudget(max_search_queries=20, search_queries_per_turn=5),
+        )
+
+        result = await AgenticDiscoveryStep().run(context)
+
+        assert result.data["discovery_queries_issued"] == [repeat]
+
+
+class TestDiscoveryIsToldWhatItsThreadsWereWorth:
+    """§4.5: only polling threads can contribute a counted opinion, and in
+    the measured run 74 of 106 could not. A loop that is never told that
+    cannot steer away from it."""
+
+    async def test_the_running_triage_tally_reaches_the_next_prompt(self) -> None:
+        llm = _SpyLLM([_batch("first angle here"), _batch("second angle here"), _stop()])
+        context = _context(_plan(), llm=llm, search=_CountingSearch())
+        context.data["triage_tally"] = {"polling": 3, "topical": 17}
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert "3 are open questions that count and 17 are not" in llm.prompts[-1]
+
+    async def test_a_turn_is_told_how_many_of_its_threads_asked_another_question(self) -> None:
+        """The tally's second number. A turn told only that its threads were
+        open questions will keep finding open questions — the busiest of
+        which ask the criterion-free version and decide the ranking."""
+        llm = _SpyLLM([_batch("first angle here"), _batch("second angle here"), _stop()])
+        context = _context(_plan(), llm=llm, search=_CountingSearch())
+        context.data["triage_tally"] = {"polling": 12, "topical": 4, "off_criterion": 9}
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert "9 of them ask a different question" in llm.prompts[-1]
+
+    async def test_the_first_turn_claims_no_tally_it_does_not_have(self) -> None:
+        llm = _SpyLLM([_stop()])
+        context = _context(_plan(), llm=llm, search=_CountingSearch())
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert "No thread has been classified yet" in llm.prompts[0]
+        assert "are open questions that count" not in llm.prompts[0]
+
+
 class TestAddressesBecomeDocuments:
     async def test_the_query_is_restricted_to_reddit_by_the_tool_not_the_model(self) -> None:
         """A restriction the model can forget is not a restriction (plan §2.11)."""
@@ -364,7 +522,12 @@ class TestAddressesBecomeDocuments:
 
         assert adapter.batches == [["doc1"]]
 
-    async def test_every_collected_id_is_hydrated_in_one_call(self) -> None:
+    async def test_every_collected_id_is_hydrated_exactly_once(self) -> None:
+        """Hydration moved from one call at the end to one per turn (plan
+        §2.14.2), so that a document can be triaged and read while the loop
+        is still searching. What must not change: every id found is
+        hydrated, and none of them twice — a document hydrated twice would
+        be a thread counted twice."""
         search = _CountingSearch()
         adapter = _HydratingAdapter()
         llm = FakeLLMProvider(
@@ -380,7 +543,34 @@ class TestAddressesBecomeDocuments:
 
         await AgenticDiscoveryStep().run(context)
 
-        assert adapter.batches == [["doc1", "doc2", "doc3"]]
+        hydrated = [post_id for batch in adapter.batches for post_id in batch]
+        assert hydrated == ["doc1", "doc2", "doc3"]
+        assert len(hydrated) == len(set(hydrated))
+
+    async def test_documents_are_published_while_the_loop_is_still_searching(self) -> None:
+        """The point of the change: 14.8's orchestrator starts a strand on
+        the first turn's documents rather than on the last turn's."""
+        search = _CountingSearch()
+        adapter = _HydratingAdapter()
+        llm = FakeLLMProvider(
+            {DiscoveryTurnResponse: _turns("first angle", "second angle", "third angle")}
+        )
+        context = _context(
+            _plan(),
+            llm=llm,
+            search=search,
+            source=adapter,
+            budget=ResearchBudget(max_search_queries=3),
+        )
+
+        published: list[int] = []
+        async for batch in discover_documents(context):
+            published.append(len(search.queries))
+            assert batch
+
+        # The first batch arrived after one search, not after all three.
+        assert published[0] == 1
+        assert len(published) == 3
 
     async def test_nothing_found_means_no_hydrate_call_at_all(self) -> None:
         adapter = _HydratingAdapter()

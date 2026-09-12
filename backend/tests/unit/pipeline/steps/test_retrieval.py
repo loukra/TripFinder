@@ -8,6 +8,7 @@ from builders.phase7 import RecordingSourceAdapter, make_comment, make_context, 
 from tripfinder.analysis.aliases import StaticAliasTable
 from tripfinder.domain.config import ResearchBudget, ResearchConfig
 from tripfinder.domain.models import (
+    Comment,
     EntityType,
     ResearchFlag,
     ResearchStatus,
@@ -227,3 +228,103 @@ async def test_the_step_advances_the_research_to_analyzing() -> None:
     await ContentRetrievalStep().run(context)
 
     assert context.research.status is ResearchStatus.ANALYZING
+
+
+# Plan §2.14.2 — breadth before depth. §2.12.3's finding 1 measured the
+# absence of this: the budget was spent document by document, so 13 of 25
+# threads supplied everything and doubling the analysis budget afterwards
+# *lowered* the yield, because a deeper sample of the same threads is
+# largely the same people again.
+
+
+def _fat(document_id: str, count: int) -> list[Comment]:
+    return [
+        make_comment(
+            f"{document_id}-c{index}",
+            document_id=document_id,
+            user_id=f"{document_id}-u{index}",
+            score=index,
+        )
+        for index in range(count)
+    ]
+
+
+async def test_one_thread_cannot_fill_the_corpus_by_itself() -> None:
+    adapter = RecordingSourceAdapter({"big": _fat("big", 500), "small": _fat("small", 10)})
+    context = make_context(
+        config=ResearchConfig(
+            budget=ResearchBudget(max_comments=200, max_comments_per_document=50)
+        ),
+        source=adapter,
+    )
+    _triaged(context, polling=["big", "small"])
+
+    await ContentRetrievalStep().run(context)
+
+    retrieved = context.data["polling_comments"]
+    assert len(retrieved) == 60
+    # Both threads are represented, which is the whole point: the small one
+    # would have been reached in neither the old order nor a raised budget.
+    assert {comment.source_document_id for comment in retrieved} == {"big", "small"}
+
+
+async def test_the_cap_keeps_each_documents_best_scoring_comments() -> None:
+    adapter = RecordingSourceAdapter({"big": _fat("big", 20)})
+    context = make_context(
+        config=ResearchConfig(
+            budget=ResearchBudget(max_comments=100, max_comments_per_document=3)
+        ),
+        source=adapter,
+    )
+    _triaged(context, polling=["big"])
+
+    await ContentRetrievalStep().run(context)
+
+    assert {comment.id for comment in context.data["polling_comments"]} == {
+        "big-c19",
+        "big-c18",
+        "big-c17",
+    }
+
+
+async def test_what_the_cap_dropped_is_recorded_rather_than_silently_lost() -> None:
+    adapter = RecordingSourceAdapter({"big": _fat("big", 100)})
+    context = make_context(
+        config=ResearchConfig(
+            budget=ResearchBudget(max_comments=1000, max_comments_per_document=40)
+        ),
+        source=adapter,
+    )
+    _triaged(context, polling=["big"])
+
+    await ContentRetrievalStep().run(context)
+
+    dropped = [
+        suppression
+        for suppression in context.research.diagnostics.suppressions
+        if suppression.reason is SuppressionReason.BUDGET_MAX_COMMENTS
+        and "each document" in (suppression.detail or "")
+    ]
+    assert sum(suppression.count for suppression in dropped) == 60
+
+
+async def test_freed_budget_reaches_the_threads_that_were_never_opened() -> None:
+    """The measured failure, as a test: three fat threads consumed a 600
+    comment budget in document order and the fourth was never fetched."""
+    adapter = RecordingSourceAdapter(
+        {name: _fat(name, 300) for name in ("t1", "t2", "t3", "t4")}
+    )
+    context = make_context(
+        config=ResearchConfig(
+            budget=ResearchBudget(max_comments=600, max_comments_per_document=150)
+        ),
+        source=adapter,
+    )
+    _triaged(context, polling=["t1", "t2", "t3", "t4"])
+
+    await ContentRetrievalStep().run(context)
+
+    assert context.research.statistics["documents_retrieved"] == 4
+    assert {
+        comment.source_document_id for comment in context.data["polling_comments"]
+    } == {"t1", "t2", "t3", "t4"}

@@ -1,11 +1,17 @@
 """Aggregation + Ranking (plan §4.6 steps 11-12, exact math in ``ranking/aggregation.py``).
 
-The last step before persistence. It turns Phase 10's ``counted_opinions``
-into ranked ``Result`` rows and — because nothing downstream still needs to —
-settles the run's terminal status (plan §7.1): whichever of ``completed``,
+Turns Phase 10's ``counted_opinions`` into ranked ``Result`` rows and
+decides the run's terminal status (plan §7.1): whichever of ``completed``,
 ``completed_partial`` or ``completed_degraded`` the run has earned, using the
 source-health verdict Phase 7's :class:`SourceHealthAssessmentStep` already
 recorded and the budget-limited flag any earlier step may have raised.
+
+**Decides it, but does not apply it.** The verdict is parked in
+``context.data["terminal_status"]`` and Summarization — the actual last step
+— puts it on the research. This step used to set it directly, from a time
+when it really was last; once Summarization moved in behind it, that made
+every run publish a terminal status one step early, with a complete ranking
+and no explanations under it.
 
 ``source_unavailable`` never reaches here: Phase 7's health step halts the
 pipeline itself the moment every adapter fails (plan §7, §8.1 rule 1), so a
@@ -72,7 +78,17 @@ class AggregationStep:
         statistics["entities_strong"] = len(outcome.strong)
         statistics["entities_weak"] = len(outcome.weak)
 
-        context.research.status = terminal_status(
+        # Decided here, applied by the last step. §7.1's logic belongs to
+        # this step — it is the one that knows the outcome — but a terminal
+        # status is a promise that the record is complete, and Summarization
+        # has not run yet. The worker saves after every step, so setting it
+        # here published a finished-looking run whose results carried no
+        # explanations for as long as the summarization call took. A client
+        # that stops polling on a terminal status (every client does) read
+        # exactly that record and never looked again: a ranking with no
+        # reasons under it, indistinguishable from one whose explanations
+        # were thrown away.
+        context.data["terminal_status"] = terminal_status(
             _source_outcome(context), budget_limited=_budget_limited(context)
         )
         return context

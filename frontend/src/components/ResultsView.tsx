@@ -7,6 +7,10 @@ import type { ResearchResultsResponse, ResultItem } from "@/lib/types";
 interface ResultsViewProps {
   researchId: string;
   data: ResearchResultsResponse;
+  /** Whether the page is still receiving updates for this run. A provisional
+   *  ranking that is no longer being refreshed must not keep promising that
+   *  its numbers are growing. */
+  live?: boolean;
 }
 
 interface Hold {
@@ -24,13 +28,22 @@ function confidenceBand(confidence: number): { label: string; tagClass: string }
   return { label: "low confidence", tagClass: "tag tag-outline" };
 }
 
-export function ResultsView({ researchId, data }: ResultsViewProps) {
-  // What the reader is currently busy with: a row hovered or focused, or an
-  // evidence panel open. A provisional list reorders as counts grow (plan
-  // §2.13.1), which is honest — except at the moment it moves a row out from
-  // under someone reading it. So while anything is held the view keeps
-  // showing what was on screen when the hold began, and takes the newest
-  // data the moment the hold ends.
+export function ResultsView({ researchId, data, live = true }: ResultsViewProps) {
+  // A provisional list reorders as counts grow (plan §2.13.1), which is
+  // honest — except at the moment it moves a row out from under someone who
+  // has opened its evidence. So an open evidence panel holds the view where
+  // it was, and it takes the newest data the moment the panel closes.
+  //
+  // **Two bounds, both of them learned the hard way.** The first version
+  // also held on hover and on focus, and held the *data* rather than the
+  // provisional data — so a pointer resting anywhere on the list froze the
+  // page, and the freeze outlived the run: the final answer arrived and was
+  // never shown, under a banner still promising that the numbers were
+  // growing. A view that withholds the finished result is worse than one
+  // that reorders under a cursor, and a banner that describes a state the
+  // page is no longer in is exactly the §0.1 failure in miniature. So:
+  // nothing holds a finished run, and only a deliberate act — opening
+  // evidence — holds an unfinished one.
   const [hold, setHold] = useState<Hold>(() => ({ keys: new Set(), frozen: null }));
 
   const setRowHeld = useCallback(
@@ -48,7 +61,8 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
     [data]
   );
 
-  const shown = hold.frozen ?? data;
+  // A finished run is the answer. It always lands, whatever is being read.
+  const shown = data.provisional ? (hold.frozen ?? data) : data;
   const { results, weak_results: weakResults, message, provisional } = shown;
   const percentagesSuppressed = shown.percentages_suppressed;
   const threshold = shown.minimum_independent_users;
@@ -76,12 +90,20 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
   if (results.length === 0 && candidates.length === 0) {
     return (
       <section className="section" aria-label="Results">
-        <p>{message}</p>
-        <p className="text-muted empty-state">
-          {provisional
-            ? "Nothing counted yet. The first comments are still being read — anything that appears here will be something somebody actually wrote."
-            : "No entities gathered enough independent supporters to be reported as a strong recommendation this time."}
-        </p>
+        {provisional && (
+          <p className="banner banner-provisional">
+            <strong>Provisional result</strong>
+            {live ? " — still counting." : " — the last one this page received."}
+          </p>
+        )}
+        <div className="panel">
+          <p>{message}</p>
+          <p className="text-muted empty-state">
+            {provisional
+              ? "Nothing counted yet. The first comments are still being read — anything that appears here will be something somebody actually wrote."
+              : "No entities gathered enough independent supporters to be reported as a strong recommendation this time."}
+          </p>
+        </div>
       </section>
     );
   }
@@ -96,9 +118,17 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
 
   return (
     <section className="section rise" aria-label="Results">
+      {/* The provisional ranking is drawn exactly like the finished one —
+          same rows, same ranks, same place on the page — and says what it is
+          in a banner above rather than in a different layout. Plan §2.13.1
+          allows this: the order may still move, and a list under an explicit
+          provisional label is behaving as promised. */}
       {provisional && (
         <p className="banner banner-provisional">
-          Still counting — these numbers can only grow.
+          <strong>Provisional result</strong>
+          {live
+            ? " — still counting, and these numbers can only grow."
+            : " — the last one this page received."}
           {pool > 0 && ` ${pool} people have given an opinion we can count so far.`}
         </p>
       )}
@@ -112,24 +142,19 @@ export function ResultsView({ researchId, data }: ResultsViewProps) {
       )}
 
       {results.length > 0 && (
-        <>
-          {provisional && (
-            <h2 className="results-group-heading">Ahead so far</h2>
-          )}
-          <ol className="result-list">
-            {results.map((result, index) => (
-              <ResultRow
-                key={result.entity_id}
-                researchId={researchId}
-                result={result}
-                rank={provisional ? null : index + 1}
-                provisional={provisional}
-                maxSupporterCount={maxSupporterCount}
-                onHoldChange={setRowHeld}
-              />
-            ))}
-          </ol>
-        </>
+        <ol className="result-list">
+          {results.map((result, index) => (
+            <ResultRow
+              key={result.entity_id}
+              researchId={researchId}
+              result={result}
+              rank={index + 1}
+              provisional={provisional}
+              maxSupporterCount={maxSupporterCount}
+              onHoldChange={setRowHeld}
+            />
+          ))}
+        </ol>
       )}
 
       {belowCap.length > 0 && (
@@ -213,9 +238,6 @@ function ResultRow({
   onHoldChange,
 }: ResultRowProps) {
   const [showEvidence, setShowEvidence] = useState(false);
-  // Two reasons a row can be held, tracked separately: the mouse can leave a
-  // row whose evidence panel is still open, and that row is still being read.
-  const pointerKey = `${result.entity_id}:pointer`;
   const evidenceKey = `${result.entity_id}:evidence`;
 
   function toggleEvidence() {
@@ -232,13 +254,7 @@ function ResultRow({
   const confidence = confidenceBand(result.confidence);
 
   return (
-    <li
-      className="result-row"
-      onMouseEnter={() => onHoldChange(pointerKey, true)}
-      onMouseLeave={() => onHoldChange(pointerKey, false)}
-      onFocus={() => onHoldChange(pointerKey, true)}
-      onBlur={() => onHoldChange(pointerKey, false)}
-    >
+    <li className="result-row">
       <div className="result-main">
         <div className="result-figure">
           <div className="result-count">{result.supporter_count}</div>
@@ -247,8 +263,8 @@ function ResultRow({
 
         <div className="result-body">
           <div className="result-header">
-            {/* No rank number while the list is still moving: a podium
-                position is a claim the counts cannot support yet. */}
+            {/* The rank is the list's current order, provisional or not; the
+                banner above says which of the two it is. */}
             {rank !== null && <span className="text-muted result-rank">#{rank}</span>}
             <h3 className="result-name">{result.entity_name}</h3>
             <span className={`${confidence.tagClass} result-confidence`}>{confidence.label}</span>

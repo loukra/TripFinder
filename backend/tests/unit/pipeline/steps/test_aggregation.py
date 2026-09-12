@@ -115,12 +115,25 @@ class TestRelevanceSuppression:
 
 
 class TestTerminalStatus:
+    """§7.1's verdict is this step's to make. Applying it is not: it is
+    published by Summarization, which actually runs last. A terminal status
+    set here is a run advertising itself as finished with a step still to
+    go."""
+
+    async def test_the_verdict_is_parked_rather_than_published(self) -> None:
+        context = _context()
+
+        await AggregationStep().run(context)
+
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED
+        assert context.research.status is not ResearchStatus.COMPLETED
+
     async def test_defaults_to_completed_when_no_health_assessment_is_present(self) -> None:
         context = _context()
 
         await AggregationStep().run(context)
 
-        assert context.research.status is ResearchStatus.COMPLETED
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED
 
     async def test_a_healthy_assessment_yields_completed(self) -> None:
         context = _context()
@@ -128,7 +141,7 @@ class TestTerminalStatus:
 
         await AggregationStep().run(context)
 
-        assert context.research.status is ResearchStatus.COMPLETED
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED
 
     async def test_a_degraded_assessment_yields_completed_degraded(self) -> None:
         context = _context()
@@ -136,7 +149,7 @@ class TestTerminalStatus:
 
         await AggregationStep().run(context)
 
-        assert context.research.status is ResearchStatus.COMPLETED_DEGRADED
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED_DEGRADED
 
     async def test_a_budget_limited_flag_yields_completed_partial(self) -> None:
         context = _context()
@@ -144,7 +157,7 @@ class TestTerminalStatus:
 
         await AggregationStep().run(context)
 
-        assert context.research.status is ResearchStatus.COMPLETED_PARTIAL
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED_PARTIAL
 
     async def test_degraded_outranks_budget_limited(self) -> None:
         context = _context()
@@ -153,4 +166,4 @@ class TestTerminalStatus:
 
         await AggregationStep().run(context)
 
-        assert context.research.status is ResearchStatus.COMPLETED_DEGRADED
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED_DEGRADED

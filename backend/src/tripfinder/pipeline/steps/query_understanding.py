@@ -20,6 +20,7 @@ from tripfinder.analysis.query_understanding import (
     CLARIFICATION_QUESTION,
     DEFAULT_REJECTION_REASON,
     GLOBAL_SCOPE,
+    OFF_TOPIC_REJECTION_REASON,
     EntityGranularityCandidate,
     QueryUnderstandingResponse,
     build_query_understanding_prompt,
@@ -60,15 +61,25 @@ class QueryUnderstandingStep:
             prompt=prompt, response_model=QueryUnderstandingResponse
         )
 
-        if not response.is_travel_recommendation_query:
+        config = context.research.research_config.query_understanding
+
+        # Two different reasons to stop, and they say different things to
+        # the user: one is "this cannot be answered by counting opinions",
+        # the other is "this product only covers travel".
+        if not response.is_recommendation_query:
             context.data["rejection_reason"] = response.rejection_reason or DEFAULT_REJECTION_REASON
+            context.research.status = ResearchStatus.REJECTED
+            return context
+
+        if config.restrict_to_travel_queries and not response.is_about_travel:
+            context.data["rejection_reason"] = OFF_TOPIC_REJECTION_REASON
             context.research.status = ResearchStatus.REJECTED
             return context
 
         candidates = sorted(
             response.granularity_candidates, key=lambda c: c.confidence, reverse=True
         )
-        threshold = context.research.research_config.query_understanding.granularity_threshold
+        threshold = config.granularity_threshold
 
         if not candidates or candidates[0].confidence < threshold:
             clarification = ClarificationRequest(

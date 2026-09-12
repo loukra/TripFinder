@@ -1,13 +1,13 @@
 "use client";
 
-import type { ResearchStatus } from "@/lib/types";
+import { RESULTS_READY_STATUSES, type ResearchStatus } from "@/lib/types";
 
 interface ProgressViewProps {
   status: ResearchStatus;
   message: string;
-  statistics: Record<string, number>;
-  onCancel: () => void;
-  cancelling: boolean;
+  /** Omitted once the run is over — there is nothing left to cancel. */
+  onCancel?: () => void;
+  cancelling?: boolean;
 }
 
 // The pipeline stages a running research passes through, in the order of
@@ -22,15 +22,20 @@ const PIPELINE_STAGES: ReadonlyArray<{ status: ResearchStatus; label: string }> 
   { status: "aggregating", label: "Counting independent people" },
 ];
 
-export function ProgressView({ status, message, statistics, onCancel, cancelling }: ProgressViewProps) {
-  const statEntries = Object.entries(statistics);
+// This column stays beside the results after the run ends, so that the
+// ranking does not move on the page at the moment it becomes final. A
+// finished run has therefore passed every stage, and says so; a run that
+// stopped early never reaches here (the page leaves the column empty), so
+// the checklist never has to guess how far a failure got.
+export function ProgressView({ status, message, onCancel, cancelling = false }: ProgressViewProps) {
+  const finished = RESULTS_READY_STATUSES.has(status);
   // `pending` is a real running status but sits before the first stage, so it
   // leaves every row waiting rather than claiming progress that has not happened.
-  const activeIndex = PIPELINE_STAGES.findIndex((stage) => stage.status === status);
-  const completedFraction = (activeIndex + 1) / PIPELINE_STAGES.length;
+  const activeIndex = finished ? -1 : PIPELINE_STAGES.findIndex((stage) => stage.status === status);
+  const completedFraction = finished ? 1 : (activeIndex + 1) / PIPELINE_STAGES.length;
 
   return (
-    <section className="section" aria-live="polite" aria-label="Research progress">
+    <section className="run-progress" aria-live="polite" aria-label="Research progress">
       <p className="progress-status">
         <span className="status-badge">{status}</span> {message}
       </p>
@@ -41,8 +46,8 @@ export function ProgressView({ status, message, statistics, onCancel, cancelling
 
       <ol className="stage-list">
         {PIPELINE_STAGES.map((stage, index) => {
-          const done = activeIndex >= 0 && index < activeIndex;
-          const active = index === activeIndex;
+          const done = finished || (activeIndex >= 0 && index < activeIndex);
+          const active = !finished && index === activeIndex;
           const state = done ? "Done" : active ? "In progress" : "Waiting";
           return (
             <li
@@ -59,22 +64,13 @@ export function ProgressView({ status, message, statistics, onCancel, cancelling
         })}
       </ol>
 
-      {statEntries.length > 0 && (
-        <dl className="stat-grid">
-          {statEntries.map(([key, value]) => (
-            <div key={key} className="stat-card">
-              <dd>{value.toLocaleString()}</dd>
-              <dt className="text-muted">{key.replaceAll("_", " ")}</dt>
-            </div>
-          ))}
-        </dl>
+      {onCancel && (
+        <div className="progress-actions">
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={cancelling}>
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        </div>
       )}
-
-      <div className="progress-actions">
-        <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={cancelling}>
-          {cancelling ? "Cancelling…" : "Cancel"}
-        </button>
-      </div>
     </section>
   );
 }

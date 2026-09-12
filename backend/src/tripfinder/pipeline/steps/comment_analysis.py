@@ -88,7 +88,7 @@ another adapter in the same recorder, rather than a parallel accounting
 scheme with its own rules to keep in step.
 """
 
-DEFAULT_MAX_CONCURRENT_BATCHES = 8
+DEFAULT_MAX_CONCURRENT_BATCHES = 64
 """Batches in flight at once (plan §2.12, 14.6b).
 
 Derived, not guessed. A 20-comment batch measured 23.2 s at
@@ -98,6 +98,20 @@ tail reserve comes off the 300 s budget. Fitting 50 batches into that window
 needs about five in flight; eight leaves headroom for batches slower than
 the measured one without pushing hard into provider rate limits, which
 answer with 429s that §8.1 has to account for as lost evidence.
+
+Raised to 32 for 14.8 (plan §2.14.1). 16 was measured: 1500 comments, every
+batch dispatched, nothing lost to the deadline — so there was headroom left
+and the analysis budget, not the clock, was the binding limit. 5000 comments
+is 250 calls. Per-call latency is a fixed ~21 s that does not shrink with
+the payload (§2.12.3), so the only variable is how many waves those calls
+take: at 32 that is 8 waves and about 165 s, at 64 it is 4 and about 85 s.
+The pipeline removed the ~135 s pre-roll that used to sit in front of them,
+so this is now most of a run's wall clock. The arithmetic that sets it changed:
+a top result of 100 supporters needs ~1500 analysed comments, which is 75
+calls, and per-call latency does not shrink when the payload does (§2.12.3).
+Waves are therefore the only variable left. 16 is a deliberate half-step —
+§2.14.1's arithmetic asks for ~80, and this is the value being tried first
+against a real account's rate limit before going wider.
 
 Phase 15 tunes this against real runs. It is the kind of number that should
 move once there is more than one measurement behind it.
@@ -216,7 +230,7 @@ class _BatchResult(NamedTuple):
     """The §8.1 failure kind, when this batch raised instead of answering."""
 
 
-def _batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
+def batched(comments: Sequence[Comment], size: int) -> Iterator[Sequence[Comment]]:
     for start in range(0, len(comments), size):
         yield comments[start : start + size]
 
@@ -269,7 +283,7 @@ class CommentAnalysisStep:
         # Counted comments first, in the §4.5 budget order pre-filter left
         # them in: the corpus that decides the ranking is dispatched before
         # the corpus that only illustrates it.
-        batches = list(_batched(counted + evidence, self._batch_size))
+        batches = list(batched(counted + evidence, self._batch_size))
         emitter = _SnapshotEmitter(context, counted=counted, evidence=evidence)
         results = await self._analyse_all(context, plan, batches, emitter)
 
@@ -371,7 +385,7 @@ class CommentAnalysisStep:
                         undispatched=tuple(comment.id for comment in batch),
                     )
                 try:
-                    result = await self._analyse(context, plan, batch)
+                    result = await self.analyse_batch(context, plan, batch)
                 except LLMCredentialError:
                     # Not a property of this batch. A run with no credential
                     # cannot analyse anything, so isolating it would turn a
@@ -412,10 +426,16 @@ class CommentAnalysisStep:
             )
         )
 
-    async def _analyse(
+    async def analyse_batch(
         self, context: PipelineContext, plan: ResearchPlan, batch: Sequence[Comment]
     ) -> _BatchResult:
-        """One structured call, matched back to the comments it was asked about."""
+        """One structured call, matched back to the comments it was asked about.
+
+        Public because 14.8's strands issue exactly this call (plan §2.14.2).
+        The step keeps owning it: quote verification, the discard rules and
+        the audit trail are the analysis contract (§5), and a strand that
+        re-implemented any of them would be a second contract.
+        """
         response = await context.llm.complete_structured(
             prompt=build_comment_analysis_prompt(plan, batch),
             response_model=CommentAnalysisBatch,

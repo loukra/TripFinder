@@ -24,6 +24,14 @@ Two things this loop owns beyond queue mechanics:
   ``results``/``weak_results`` are written, never a status, a statistic or a
   diagnostic — the run's record is always the output of the full step 8-12
   pass, which lands here moments later by the ordinary route.
+* **The lease** (plan §1's job queue). A claimed job is held by a heartbeat
+  for as long as the pipeline runs, and handed back to the queue if the
+  heartbeat stops — which is what turns a killed worker from "this run is
+  stranded at `analyzing` for ever" into "another worker picks it up". The
+  timeout alone would not be safe with more than one worker: it would hand a
+  slow-but-alive run to a second one. The heartbeat says which of the two a
+  quiet job is, and the claim token stops a worker that was declared dead
+  from finishing a job somebody else has taken over.
 * **The error contract** (plan §0.1, plan §10 Phase 13). ``PipelineRunner``
   already converts an LLM provider failure into a named, ``failed`` research;
   everything else — a bug, a mapping error, anything unexpected — used to
@@ -37,6 +45,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -56,9 +66,23 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 
+DEFAULT_HEARTBEAT_SECONDS = 15.0
+"""How often a worker says it is still alive."""
+
+DEFAULT_LEASE_SECONDS = 90.0
+"""How long a job may go unheard from before the queue takes it back.
+
+Six heartbeats. A run is minutes long and its last step can be a slow model
+call, so the number that matters is not how long the work takes — it is how
+long a *living* worker can go without touching the row.
+"""
+
 
 async def run_once(
-    session_factory: async_sessionmaker[AsyncSession], *, settings: Settings | None = None
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    settings: Settings | None = None,
+    heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
 ) -> bool:
     """Claim and run at most one job. Returns whether a job was claimed."""
     settings = settings if settings is not None else Settings.from_env()
@@ -77,6 +101,25 @@ async def run_once(
     async def _should_cancel() -> bool:
         async with session_factory() as session:
             return await JobRepository(session).is_cancel_requested(job.id)
+
+    async def _hold_lease(claim_token: UUID) -> None:
+        """Say we are alive, until the job is done or the lease is taken."""
+        while True:
+            await asyncio.sleep(heartbeat_seconds)
+            async with session_factory() as session:
+                held = await JobRepository(session).heartbeat(job.id, claim_token=claim_token)
+            if not held:
+                logger.warning(
+                    "worker: lost the lease on job %s — another worker has it now", job.id
+                )
+                return
+
+    token = job.claim_token
+    lease = (
+        asyncio.create_task(_hold_lease(token))
+        if token is not None and heartbeat_seconds > 0
+        else None
+    )
 
     context = None
     last_snapshot_sequence = 0
@@ -120,18 +163,28 @@ async def run_once(
         research.status = ResearchStatus.FAILED
         async with session_factory() as session:
             await ResearchRepository(session).save(research)
-            await JobRepository(session).mark_failed(job.id, str(exc))
+            await JobRepository(session).mark_failed(job.id, str(exc), claim_token=token)
         return True
     finally:
+        if lease is not None:
+            lease.cancel()
         if context is not None:
             await _aclose_if_supported(context.source)
 
     async with session_factory() as session:
-        await ResearchRepository(session).save(context.research)
         if context.research.status is ResearchStatus.CANCELLED:
-            await JobRepository(session).mark_cancelled(job.id)
+            kept = await JobRepository(session).mark_cancelled(job.id, claim_token=token)
         else:
-            await JobRepository(session).mark_succeeded(job.id)
+            kept = await JobRepository(session).mark_succeeded(job.id, claim_token=token)
+        # A worker that lost its lease is reporting on a run another worker
+        # is already redoing. Writing the research row here would overwrite
+        # whatever that one has produced since.
+        if kept:
+            await ResearchRepository(session).save(context.research)
+        else:
+            logger.warning(
+                "worker: discarding the result of job %s — its lease was taken over", job.id
+            )
     return True
 
 
@@ -148,12 +201,26 @@ async def run_worker_loop(
     settings: Settings | None = None,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     max_iterations: int | None = None,
+    heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> None:
     """Poll for jobs forever, or up to ``max_iterations`` times (for tests)."""
     settings = settings if settings is not None else Settings.from_env()
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
-        processed = await run_once(session_factory, settings=settings)
+        # Before claiming anything new: hand back whatever a dead worker was
+        # holding. Every loop, not only at startup — the worker that dies is
+        # not always the one that restarts.
+        async with session_factory() as session:
+            recovered = await JobRepository(session).requeue_stale(
+                older_than=timedelta(seconds=lease_seconds)
+            )
+        if recovered:
+            logger.warning("worker: returned %d stranded job(s) to the queue", recovered)
+
+        processed = await run_once(
+            session_factory, settings=settings, heartbeat_seconds=heartbeat_seconds
+        )
         if not processed:
             await asyncio.sleep(poll_interval_seconds)
         iterations += 1

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Sequence
+from difflib import SequenceMatcher
 from typing import NamedTuple
 
 from tripfinder.analysis.entity_resolution import ResolvedMention
@@ -39,7 +40,12 @@ from tripfinder.analysis.summarization import (
     EntitySummaryBatch,
     build_summarization_prompt,
 )
-from tripfinder.domain.models import Result, Stance, SuppressionReason
+from tripfinder.domain.models import (
+    ResearchStatus,
+    Result,
+    Stance,
+    SuppressionReason,
+)
 from tripfinder.pipeline.base import PipelineContext
 
 logger = logging.getLogger(__name__)
@@ -61,6 +67,50 @@ class _BatchResult(NamedTuple):
 
     discarded: int
     """Items that named no entity in the batch, or named one twice."""
+
+
+_ENCLOSING_PAIRS = (('"', '"'), ("'", "'"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+"""Delimiters a citation may arrive wrapped in. Straight and curly, because
+the model renders them either way."""
+
+
+def _unwrapped(quote: str) -> str:
+    """One matched pair of enclosing quotation marks removed, if present.
+
+    The prompt used to print every supplied quote inside quotation marks, and
+    a model told to copy "character for character" copied those too. Stripping
+    a delimiter this pipeline added is not loosening the anti-fabrication rule
+    — it is declining to treat our own punctuation as the model's invention.
+    Applied to both sides, so a comment that really is a quotation start to
+    finish still compares against itself.
+    """
+    for opening, closing in _ENCLOSING_PAIRS:
+        if len(quote) >= 2 and quote.startswith(opening) and quote.endswith(closing):
+            return quote[1:-1].strip()
+    return quote
+
+
+def _comparable(quote: str) -> str:
+    """One quote, as it is compared: same words, whitespace collapsed, and
+    stripped of the quotation marks this module may have wrapped it in."""
+    return _unwrapped(" ".join(quote.split()))
+
+
+def _closest(quote: str, candidates: Sequence[str]) -> str:
+    """The supplied quote a rejected citation came nearest to.
+
+    Logged beside the rejection so the next surprise takes one line to
+    diagnose rather than a run. "Not drawn from its stored evidence" is true
+    of a fabrication, of a trimmed span and of a re-punctuated copy, and only
+    the first is worth the name.
+    """
+    if not candidates:
+        return "(nothing was supplied for this entity)"
+    best = max(
+        candidates, key=lambda candidate: SequenceMatcher(None, quote, candidate).ratio()
+    )
+    ratio = SequenceMatcher(None, quote, best).ratio()
+    return f"{best!r} (similarity {ratio:.2f})"
 
 
 def _batched(
@@ -122,7 +172,27 @@ class SummarizationStep:
             fabricated=len(fabricated_ids),
             discarded=discarded,
         )
+        self._settle(context)
         return context
+
+    @staticmethod
+    def _settle(context: PipelineContext) -> None:
+        """Publish the terminal status Aggregation decided on (plan §7.1).
+
+        The last act of the last step, because that is what a terminal status
+        means: the record is complete and nothing further will be added to
+        it. Aggregation used to set it itself, back when it was last; after
+        Summarization moved in behind it, every run spent the length of a
+        summarization call advertising itself as finished while its results
+        still had no explanations — and a client stops polling the moment a
+        status goes terminal, so that was the version it kept.
+
+        A context with nothing parked is a test exercising this step alone,
+        and leaving its status untouched is the honest answer there.
+        """
+        settled = context.data.get("terminal_status")
+        if isinstance(settled, ResearchStatus):
+            context.research.status = settled
 
     def _collect_evidence(self, context: PipelineContext) -> dict[str, list[str]]:
         """Verified quotes behind each entity's *counted*, positive opinions.
@@ -176,10 +246,18 @@ class SummarizationStep:
                 discarded += 1
                 continue
             if not self._is_grounded(item, evidence):
+                unknown = [
+                    quote
+                    for quote in item.cited_quotes
+                    if _comparable(quote) not in {_comparable(q) for q in evidence.quotes}
+                ]
                 logger.warning(
                     "summarization: discarding the explanation for %s — it cites a "
-                    "quote not drawn from its stored evidence",
+                    "quote not drawn from its stored evidence: %s; nearest supplied "
+                    "quote: %s",
                     evidence.entity_name,
+                    [quote[:120] for quote in unknown] or "(no quote cited at all)",
+                    _closest(unknown[0], evidence.quotes) if unknown else "(n/a)",
                 )
                 fabricated_ids.add(item.entity_id)
                 continue
@@ -190,11 +268,20 @@ class SummarizationStep:
         )
 
     def _is_grounded(self, item: EntitySummary, evidence: EntityEvidence) -> bool:
-        """Every cited quote must be one this entity was actually given."""
+        """Every cited quote must be one this entity was actually given.
+
+        Compared with runs of whitespace collapsed, on both sides. The rule
+        this enforces (`PROJECT.md` §29) is *"the model may not cite what it
+        was not given"* — a claim about the words, not about the line breaks
+        between them. A comment quoted across two paragraphs comes back from
+        the model re-wrapped, which is not fabrication and must not be
+        reported as it; a paraphrase still fails, because collapsing
+        whitespace changes no word.
+        """
         if not item.cited_quotes:
             return False
-        known = set(evidence.quotes)
-        return all(quote in known for quote in item.cited_quotes)
+        known = {_comparable(quote) for quote in evidence.quotes}
+        return all(_comparable(quote) in known for quote in item.cited_quotes)
 
     def _record(
         self,

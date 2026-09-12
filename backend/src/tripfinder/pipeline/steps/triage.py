@@ -130,9 +130,40 @@ class DocumentTriageStep:
         for batch in _batched(undecided, self._batch_size):
             decisions.update(await self._classify(context, plan, batch, floors, now=now))
 
-        self._apply(context, documents, decisions, floors)
+        polling, topical = self.apply_decisions(context, documents, decisions)
+        record_triage_totals(
+            context, triaged=len(documents), polling=polling, topical=topical, floors=floors
+        )
+        context.data["polling_documents"] = polling
+        context.data["topical_documents"] = topical
         context.research.status = ResearchStatus.RETRIEVING
         return context
+
+    async def classify(
+        self, context: PipelineContext, documents: Sequence[SourceDocument]
+    ) -> dict[str, TriageDecision]:
+        """Decide one wave of documents (plan §2.14.2).
+
+        Public so that 14.8's orchestrator can triage each arriving batch
+        instead of waiting for discovery to finish. The deterministic
+        pre-checks and the AI classification are unchanged: a strand must
+        not be started on a document a sequential run would have excluded.
+        """
+        plan: ResearchPlan = context.data["plan"]
+        floors = context.research.research_config.triage_floors
+        now = self._now or datetime.now(UTC)
+
+        decisions: dict[str, TriageDecision] = {}
+        undecided: list[SourceDocument] = []
+        for document in documents:
+            decision = self._pre_check(document, plan, floors, now=now)
+            if decision is None:
+                undecided.append(document)
+            else:
+                decisions[document.id] = decision
+        for batch in _batched(undecided, self._batch_size):
+            decisions.update(await self._classify(context, plan, batch, floors, now=now))
+        return decisions
 
     def _apply_post_budget(self, context: PipelineContext) -> list[SourceDocument]:
         """Enforce ``maxTotalPosts`` here — before triage pays to classify them."""
@@ -188,7 +219,6 @@ class DocumentTriageStep:
                 document,
                 TriageVerdict.TOPICAL,
                 f"title names {named} at the target granularity, so it leads the answer",
-                criterion_match=False,
             )
 
         if _is_interrogative(document.title):
@@ -238,13 +268,14 @@ class DocumentTriageStep:
             decisions[document.id] = _downgrade_only(item, floors)
         return decisions
 
-    def _apply(
+    def apply_decisions(
         self,
         context: PipelineContext,
         documents: Sequence[SourceDocument],
         decisions: dict[str, TriageDecision],
-        floors: TriageFloors,
-    ) -> None:
+    ) -> tuple[list[SourceDocument], list[SourceDocument]]:
+        """Record one wave's verdicts and split it. Suppressions are written
+        here, so this must be called exactly once per document."""
         diagnostics = context.research.diagnostics
         polling: list[SourceDocument] = []
         topical: list[SourceDocument] = []
@@ -267,19 +298,48 @@ class DocumentTriageStep:
                     detail=decision.reason,
                 )
 
-        diagnostics.triage_decisions = [decisions[document.id] for document in documents]
+        diagnostics.triage_decisions.extend(decisions[document.id] for document in documents)
+        return polling, topical
 
-        excluded = len(documents) - len(polling) - len(topical)
-        context.research.statistics["documents_triaged"] = len(documents)
-        context.research.statistics["documents_polling"] = len(polling)
-        context.research.statistics["documents_topical"] = len(topical)
-        context.research.statistics["documents_excluded"] = excluded
 
-        if documents and len(polling) / len(documents) < floors.min_polling_document_ratio:
-            diagnostics.raise_flag(ResearchFlag.LOW_POLLING_DOCUMENT_RATIO)
+def record_triage_totals(
+    context: PipelineContext,
+    *,
+    triaged: int,
+    polling: Sequence[SourceDocument],
+    topical: Sequence[SourceDocument],
+    floors: TriageFloors,
+) -> None:
+    """The run-wide triage numbers, over everything seen so far.
 
-        context.data["polling_documents"] = polling
-        context.data["topical_documents"] = topical
+    Separate from :meth:`DocumentTriageStep.apply_decisions` because the
+    ratio §4.7 checks is a property of the whole corpus, and a streaming run
+    only ever has part of it in hand (plan §2.14.2). Recomputing it over the
+    accumulated set is correct at every point; recording a per-wave ratio
+    would raise the flag on whichever wave happened to be topical-heavy.
+    """
+    statistics = context.research.statistics
+    statistics["documents_triaged"] = triaged
+    statistics["documents_polling"] = len(polling)
+    statistics["documents_topical"] = len(topical)
+    statistics["documents_excluded"] = triaged - len(polling) - len(topical)
+    # How many threads asked a *different* question than the run's — the
+    # criteria dropped, or inverted. A measured run found the standard
+    # famous-places podium for a question about underrated ones, and the
+    # only way to see why was to read 51 triage reasons by hand: 35 of the
+    # threads admitted as polling asked "which is best", not "which is
+    # underrated". A run that drifts this way does not come back thin, it
+    # comes back confident and about the wrong thing, so the drift has to
+    # be a number on the run and not a thing a reader could reconstruct
+    # (§0.1).
+    statistics["documents_off_criterion"] = sum(
+        1
+        for decision in context.research.diagnostics.triage_decisions
+        if not decision.criterion_match
+    )
+
+    if triaged and len(polling) / triaged < floors.min_polling_document_ratio:
+        context.research.diagnostics.raise_flag(ResearchFlag.LOW_POLLING_DOCUMENT_RATIO)
 
 
 def _downgrade_only(item: DocumentTriage, floors: TriageFloors) -> TriageDecision:

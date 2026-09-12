@@ -232,3 +232,67 @@ async def test_requeue_stale_leaves_recently_claimed_jobs_alone(
 
     async with session_factory() as session:
         assert await JobRepository(session).get_status(job_id) == "claimed"
+
+
+async def test_a_heartbeat_keeps_a_slow_run_out_of_the_queue(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    """The difference between recovering a crash and starting a second
+    pipeline on top of a live one. A run is minutes long and its last step
+    can be a slow model call; a timeout alone cannot tell that from a dead
+    worker, and handing such a job to a second worker spends two budgets on
+    one research."""
+    research = await _create_research(session_factory, make_research)
+    async with session_factory() as session:
+        job_id = await JobRepository(session).enqueue(research.id)
+    async with session_factory() as session:
+        claimed = await JobRepository(session).claim_next()
+    assert claimed is not None and claimed.claim_token is not None
+
+    async with session_factory() as session:
+        assert await JobRepository(session).heartbeat(job_id, claim_token=claimed.claim_token)
+
+    async with session_factory() as session:
+        # Long past the claim, but the worker has just said it is alive.
+        requeued = await JobRepository(session).requeue_stale(older_than=timedelta(seconds=0.5))
+    assert requeued == 0
+    async with session_factory() as session:
+        assert await JobRepository(session).get_status(job_id) == "claimed"
+
+
+async def test_a_worker_that_lost_its_lease_cannot_finish_the_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    """A stalled worker coming back must not report on a run another worker
+    has already been handed."""
+    research = await _create_research(session_factory, make_research)
+    async with session_factory() as session:
+        job_id = await JobRepository(session).enqueue(research.id)
+    async with session_factory() as session:
+        first = await JobRepository(session).claim_next()
+    assert first is not None and first.claim_token is not None
+
+    async with session_factory() as session:
+        assert await JobRepository(session).requeue_stale(older_than=timedelta(seconds=0)) == 1
+    async with session_factory() as session:
+        second = await JobRepository(session).claim_next()
+    assert second is not None and second.claim_token is not None
+    assert second.claim_token != first.claim_token
+
+    async with session_factory() as session:
+        kept = await JobRepository(session).mark_succeeded(job_id, claim_token=first.claim_token)
+    assert kept is False
+    async with session_factory() as session:
+        assert await JobRepository(session).get_status(job_id) == "claimed"
+
+    async with session_factory() as session:
+        stale = await JobRepository(session).heartbeat(job_id, claim_token=first.claim_token)
+    assert stale is False
+
+    # The worker that actually holds the lease still finishes normally.
+    async with session_factory() as session:
+        assert await JobRepository(session).mark_succeeded(job_id, claim_token=second.claim_token)
+    async with session_factory() as session:
+        assert await JobRepository(session).get_status(job_id) == "succeeded"

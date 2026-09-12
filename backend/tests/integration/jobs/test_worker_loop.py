@@ -367,3 +367,31 @@ async def test_a_run_cancelled_after_a_snapshot_keeps_the_evidence_it_had(
     assert fetched.status is ResearchStatus.CANCELLED
     assert [r.entity_name for r in fetched.results] == ["Alaska"]
     assert [r.entity_name for r in fetched.weak_results] == ["Vermont"]
+
+
+async def test_the_loop_picks_up_what_a_dead_worker_was_holding(
+    session_factory: async_sessionmaker[AsyncSession],
+    make_research: Callable[..., Research],
+) -> None:
+    """`requeue_stale` was written, tested and called by nobody, so killing a
+    worker left its run at `analyzing` for ever with no process behind it —
+    a run that never looks like it stopped is exactly the §0.1 failure. The
+    loop now hands back a stranded claim before it takes anything new."""
+    research = make_research()
+    async with session_factory() as session:
+        await ResearchRepository(session).create(research)
+        job_id = await JobRepository(session).enqueue(research.id)
+
+    # A worker claims it and dies: nothing ever marks it finished.
+    async with session_factory() as session:
+        assert await JobRepository(session).claim_next() is not None
+
+    await run_worker_loop(
+        session_factory, max_iterations=1, poll_interval_seconds=0, lease_seconds=0
+    )
+
+    async with session_factory() as session:
+        assert await JobRepository(session).get_status(job_id) == "succeeded"
+        recovered = await ResearchRepository(session).get(research.id)
+    assert recovered is not None
+    assert recovered.status == ResearchStatus.COMPLETED

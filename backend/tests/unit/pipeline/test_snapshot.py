@@ -282,7 +282,11 @@ class TestNothingIsDerivedFromASnapshot:
         final = await _full_pass(context, counted=analyses)
 
         assert final == await _full_pass(_context(), counted=analyses)
-        assert context.research.status is ResearchStatus.COMPLETED
+        # The run's own verdict, reached despite two snapshots having run the
+        # same steps against a copy first. `_full_pass` stops at aggregation,
+        # which is where the verdict is decided; Summarization publishes it.
+        assert context.data["terminal_status"] is ResearchStatus.COMPLETED
+        assert context.research.status is not ResearchStatus.COMPLETED
 
 
 class TestTheCorpusSplitSurvives:

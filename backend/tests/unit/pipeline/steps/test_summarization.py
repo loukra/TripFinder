@@ -23,7 +23,14 @@ from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.analysis.comment_analysis import EntityMention
 from tripfinder.analysis.entity_resolution import ResolvedMention
 from tripfinder.analysis.summarization import EntitySummary, EntitySummaryBatch
-from tripfinder.domain.models import Entity, EntityType, Result, Stance, SuppressionReason
+from tripfinder.domain.models import (
+    Entity,
+    EntityType,
+    ResearchStatus,
+    Result,
+    Stance,
+    SuppressionReason,
+)
 from tripfinder.domain.ports import LLMProvider
 from tripfinder.pipeline.base import PipelineContext
 from tripfinder.pipeline.steps.summarization import SummarizationStep
@@ -201,6 +208,119 @@ class TestHallucinationSafeguard:
         assert result.explanation is None
         assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == [1]
 
+    async def test_a_requoted_line_break_is_not_a_fabrication(self) -> None:
+        """The rule is about the words, not the line breaks between them.
+
+        A comment quoted across two paragraphs comes back from the model
+        re-wrapped. Reporting that as a fabricated quote suppressed every
+        explanation in a real run — five of five — while the quotes were
+        the ones we had handed it, character for character apart from a
+        newline."""
+        stored = "The lakes are unreal.\n\n  Nobody goes in autumn."
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA, quote=stored)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[
+                            _summary(
+                                ALASKA,
+                                cited_quotes=("The lakes are unreal. Nobody goes in autumn.",),
+                            )
+                        ]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        [result] = context.research.results
+        assert result.explanation is not None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == []
+
+    async def test_a_quote_copied_with_its_wrapping_marks_is_not_a_fabrication(self) -> None:
+        """The second time this check fired on its own formatting.
+
+        The prompt printed every supplied quote inside quotation marks and
+        told the model to copy it character for character; the model copied
+        the marks too. A measured run reported five fabrications, lost all
+        five explanations, and every cited quote was one we had handed it."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=(f'"{QUOTE}"',))])]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        [result] = context.research.results
+        assert result.explanation is not None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == []
+
+    async def test_curly_wrapping_marks_are_stripped_too(self) -> None:
+        """Models render the pair either way, and which one arrived says
+        nothing about whether the words are ours."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[_summary(ALASKA, cited_quotes=(f"\u201c{QUOTE}\u201d",))]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is not None
+
+    async def test_an_inner_quotation_mark_is_still_part_of_the_quote(self) -> None:
+        """Only a *matched enclosing* pair is a delimiter. A quotation mark
+        inside the text is one of the words, and dropping it would let a
+        citation differ from what was supplied."""
+        stored = 'He said "go north" and he was right'
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA, quote=stored)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[
+                            _summary(
+                                ALASKA, cited_quotes=("He said go north and he was right",)
+                            )
+                        ]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == [1]
+
+    async def test_a_trimmed_span_of_a_supplied_quote_is_still_refused(self) -> None:
+        """Unwrapping a delimiter is not the same as accepting a fragment.
+        The rule stays "the quotes we handed it", whole."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=(QUOTE[:12],))])]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is None
+
     async def test_an_explanation_citing_no_quotes_is_ungrounded(self) -> None:
         context = _context(
             results=[_result(ALASKA)],
@@ -297,7 +417,7 @@ class TestEvidenceIsCappedAndDeduplicated:
 
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
-        assert llm.prompts[0].count('  - "') == 2
+        assert llm.prompts[0].count("    [") == 2
 
     async def test_a_repeated_quote_is_sent_once(self) -> None:
         resolutions = [
@@ -314,7 +434,7 @@ class TestEvidenceIsCappedAndDeduplicated:
 
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
-        assert llm.prompts[0].count('  - "') == 1
+        assert llm.prompts[0].count("    [") == 1
 
 
 class TestBatching:
@@ -391,3 +511,60 @@ class TestASuppressedExplanationIsDistinguishableFromAMissingOne:
         assert context.research.statistics["results_without_evidence"] == 1
         assert context.research.statistics["summarization_fabricated_quote"] == 1
         assert context.research.statistics["results_explained"] == 0
+
+
+class TestATerminalStatusMeansTheRecordIsComplete:
+    """Plan §7.1, and the reason this step publishes the status at all.
+
+    The worker persists the whole research after every step, and every client
+    stops polling the moment a status goes terminal. So a terminal status
+    written one step early is not a cosmetic ordering detail — it is the
+    version of the record the user keeps. Aggregation used to write it, and
+    a run spent the whole length of its summarization call offering a
+    complete ranking with no reasons under it, which looks exactly like a run
+    whose explanations were all discarded.
+    """
+
+    async def test_the_status_goes_terminal_only_once_the_explanations_are_on(self) -> None:
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM([EntitySummaryBatch(items=[_summary(ALASKA)])]),
+        )
+        context.data["terminal_status"] = ResearchStatus.COMPLETED_PARTIAL
+        assert context.research.status is ResearchStatus.RETRIEVING
+
+        settled = await SummarizationStep().run(context)
+
+        assert settled.research.status is ResearchStatus.COMPLETED_PARTIAL
+        assert settled.research.results[0].explanation is not None
+
+    async def test_a_discarded_explanation_still_settles_the_run(self) -> None:
+        """The guarantee is about ordering, not about success. A run whose
+        explanation was genuinely refused must still reach a terminal status,
+        or it would hang forever on the one failure §0.1 most wants visible."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=("invented",))])]
+            ),
+        )
+        context.data["terminal_status"] = ResearchStatus.COMPLETED
+
+        await SummarizationStep().run(context)
+
+        assert context.research.status is ResearchStatus.COMPLETED
+        assert context.research.results[0].explanation is None
+
+    async def test_a_step_run_with_no_verdict_parked_invents_none(self) -> None:
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM([EntitySummaryBatch(items=[_summary(ALASKA)])]),
+        )
+        before = context.research.status
+
+        await SummarizationStep().run(context)
+
+        assert context.research.status is before

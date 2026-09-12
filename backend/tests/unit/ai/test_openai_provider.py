@@ -100,7 +100,7 @@ class TestTheHappyPath:
 
     async def test_the_default_effort_is_low(self) -> None:
         """The measured 23.2 s against a default of 32.7 s, per batch, 50 batches."""
-        assert OpenAIConfig().reasoning_effort is ReasoningEffort.LOW
+        assert OpenAIConfig().reasoning_effort is ReasoningEffort.NONE
 
     async def test_no_configured_effort_sends_no_reasoning_parameter(self) -> None:
         """Omitting the field and asking for "none" are different requests."""

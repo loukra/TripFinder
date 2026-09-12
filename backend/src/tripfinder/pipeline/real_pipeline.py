@@ -19,32 +19,31 @@ from tripfinder.domain.models import Research, ResearchStatus
 from tripfinder.pipeline.base import PartialResultsListener, PipelineContext
 from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 from tripfinder.pipeline.steps.aggregation import AggregationStep
-from tripfinder.pipeline.steps.comment_analysis import CommentAnalysisStep
-from tripfinder.pipeline.steps.discovery import AgenticDiscoveryStep
 from tripfinder.pipeline.steps.entity_resolution import EntityResolutionStep
 from tripfinder.pipeline.steps.health import SourceHealthAssessmentStep
-from tripfinder.pipeline.steps.prefilter import CheapPrefilterStep
 from tripfinder.pipeline.steps.preflight import SourcePreflightStep
 from tripfinder.pipeline.steps.query_understanding import QueryUnderstandingStep
-from tripfinder.pipeline.steps.retrieval import ContentRetrievalStep
 from tripfinder.pipeline.steps.summarization import SummarizationStep
-from tripfinder.pipeline.steps.triage import DocumentTriageStep
 from tripfinder.pipeline.steps.user_deduplication import UserDeduplicationStep
+from tripfinder.pipeline.streaming.orchestrator import StreamingStrandsStep
 from tripfinder.search.factory import build_search_provider
 from tripfinder.settings import Settings
 from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 
-# Plan §4.6's definitive order, plus the two steps the table numbers don't
-# cover: Preflight runs before step 1 (§8.1 — before any budget or token is
-# spent), and Source Health Assessment runs between steps 6 and 7 (§8.1 — as
-# soon as the corpus is in, before the expensive analysis steps run on it).
+# Plan §4.6's order, with steps 3-7 collapsed into one concurrent phase
+# (§2.14.2). Preflight still runs before step 1 (§8.1 — before any budget or
+# token is spent).
+#
+# Source Health Assessment used to sit between steps 6 and 7, so that a
+# broken source stopped the run before analysis was paid for. A pipeline
+# cannot hold that position — analysis begins while retrieval is still
+# happening — so the guarantee moved inside: `HealthGate` admits no analysis
+# call until the source has returned `minPostsRetrieved` documents, and the
+# step here keeps its second job, which is deciding what the run's outcome
+# is (§8.1).
 _POST_UNDERSTANDING_STEPS = (
-    AgenticDiscoveryStep,
-    DocumentTriageStep,
-    ContentRetrievalStep,
-    CheapPrefilterStep,
+    StreamingStrandsStep,
     SourceHealthAssessmentStep,
-    CommentAnalysisStep,
     EntityResolutionStep,
     UserDeduplicationStep,
     AggregationStep,

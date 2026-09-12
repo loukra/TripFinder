@@ -14,13 +14,92 @@ from pydantic import BaseModel, Field
 class ResearchBudget(BaseModel):
     """Hard limits on how much a single research is allowed to cost (plan §1.1)."""
 
-    max_search_queries: int = Field(default=12, gt=0)
-    max_posts_per_query: int = Field(default=25, gt=0)
-    max_total_posts: int = Field(default=120, gt=0)
-    max_comments: int = Field(default=4000, gt=0)
-    max_ai_analysis_items: int = Field(default=1000, gt=0)
-    max_research_duration_seconds: int = Field(default=300, gt=0)
-    tail_reserve_seconds: int = Field(default=60, ge=0)
+    max_search_queries: int = Field(default=20, gt=0)
+    search_queries_per_turn: int = Field(default=5, gt=0)
+    """How many queries one discovery turn may propose (plan §2.14.2).
+
+    The cap above counts queries; this one decides how many model round
+    trips they cost. At one per turn, discovery was the serial part of a
+    concurrent pipeline: the measured run analysed 2153 of 4417 admitted
+    comments and left roughly two thirds of the analysis window idle,
+    waiting for documents nobody had searched for yet. The searches within
+    a turn run concurrently, so five per turn is four fewer round trips and
+    the same number of searches.
+    """
+    max_posts_per_query: int = Field(default=40, gt=0)
+    max_total_posts: int = Field(default=300, gt=0)
+    max_comments: int = Field(default=12000, gt=0)
+    max_comments_per_document: int = Field(default=400, gt=0)
+    """How much of one thread the corpus may consist of (plan §2.14.2).
+
+    Breadth, not depth. The measured run took comments in document order
+    until the 4000-comment budget ran out, which filled the corpus from 13
+    of 25 polling threads and left the other 12 — and all 30 topical ones —
+    unopened. Doubling the analysis budget on that corpus *lowered* the
+    yield, from 0.496 respondents per analysed comment to 0.427, because a
+    deeper sample of the same threads is mostly the same people again.
+
+    200 x 300 documents is why ``max_comments`` is 12000: the cap only
+    helps if there is budget left for the threads it frees up.
+    """
+    topical_quota: float = Field(default=0.0, ge=0.0, le=1.0)
+    """The share of each budget reserved for topical material (plan §4.5).
+
+    §4.5 is explicit: *"Topical contexts consume only leftover budget, since
+    they cannot change the ranking."* This was briefly 0.15 — a reservation
+    rather than leftovers — on the reasoning that arrival-order processing
+    cannot express "polling first". The measured consequence was that
+    topical material took exactly its 15%: 1800 of 4024 admitted comments,
+    and 1341 of 2231 opinions were evidence-only, in a run whose top result
+    reached 46 supporters against a target of 100.
+
+    **Nothing consumes that corpus.** §4.5 keeps topical material for two
+    jobs, explanations and displayed counter-evidence. Phase 12's
+    explanations draw their quotes from ``counted_resolutions`` — the
+    polling corpus — and ``evidence_opinions`` is written by user
+    deduplication and read by no step, no API field and no view. Until one
+    of those two jobs is built, a non-zero quota buys fetches, analysis
+    calls and entity resolutions whose output reaches nobody.
+
+    Raising it again is a deliberate act: it takes budget from the corpus
+    that decides the ranking, and §4.5 says that is the wrong direction
+    while polling contexts are scarce.
+    """
+
+    max_ai_analysis_items: int = Field(default=8000, gt=0)
+    """The analysis corpus cap (plan §2.14.1).
+
+    5000, from the third measurement. The second one is why it is not 3000:
+    2490 analysed comments produced a pool of only 669, because the split
+    was not applied to *this* budget and roughly 770 of those calls went to
+    topical material §4.5 forbids from entering the pool. Counted comments
+    therefore received about 1731 of them, and 1731 -> 669 is a yield of
+    0.386.
+
+    With the split fixed, 5000 gives the counted corpus 4250 and a projected
+    pool near 1640. The top result held 8.7 % of that run's pool — a share
+    that has fallen as the corpus broadened, 13.4 % to 10.3 % to 8.7 % — so
+    the margin is deliberate: 8.7 % of 1640 is 142, and even 7 % clears 100.
+
+    Time is still not what this spends. Two consecutive runs stopped at
+    ``budget_limit_reached`` with no batch refused for the deadline.
+    """
+    max_research_duration_seconds: int = Field(default=180, gt=0)
+    """The promise about the whole research (plan §2.12.2, §2.14.1).
+
+    Lowered from 300 s, and it is now the **binding** limit rather than the
+    one nothing reached. Every other budget above was raised past what three
+    minutes can consume, deliberately: breadth is what the metric wants, and
+    the honest way to buy it is to fan out as wide as the clock allows and
+    then stop. Two measured runs in a row ended at ``budget_limit_reached``
+    with not one batch refused for time, which means the numbers, not the
+    wait, were what held them back.
+
+    A run that stops here is ``completed_partial`` and says so (§7.1). That
+    is the correct description: what was read was read properly, and the
+    corpus is a real but incomplete sample.
+    """
+    tail_reserve_seconds: int = Field(default=40, ge=0)
     """Subtracted from the duration budget to derive the dispatch deadline (plan §2.12.2).
 
     The limit gates what may still be *started*, never what may finish: a
@@ -63,6 +142,17 @@ class QueryUnderstandingConfig(BaseModel):
     """Query Understanding thresholds (plan §2.4, §6)."""
 
     granularity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    restrict_to_travel_queries: bool = False
+    """Whether a question that is not about travel is rejected before any
+    budget is spent (plan §10 Phase 6 acceptance).
+
+    The method counts what different people recommend; nothing in it is
+    specific to destinations. What *is* specific is everything the counting
+    runs on — the entity catalogue, the granularity tiers and §4.5's alias
+    tables all describe geography — so a non-travel question is read
+    honestly and then resolves almost nothing. Off by default while that is
+    being explored; the gate itself stays, one field away.
+    """
 
 
 class PrefilterConfig(BaseModel):
