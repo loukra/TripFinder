@@ -121,10 +121,12 @@ class Model:
         *,
         turns: int = 4,
         verdict: TriageVerdict = TriageVerdict.POLLING,
+        criterion_match: bool = True,
         block_search_until_analysed: bool = False,
     ) -> None:
         self._turns = turns
         self._verdict = verdict
+        self._criterion_match = criterion_match
         self._block = block_search_until_analysed
         self.search_turns = 0
         self.analysis_calls = 0
@@ -159,7 +161,7 @@ class Model:
                         verdict=self._verdict,
                         scope_match=True,
                         granularity_match=True,
-                        criterion_match=True,
+                        criterion_match=self._criterion_match,
                         confidence=0.9,
                         reason="asks people to name states",
                     )
@@ -380,3 +382,26 @@ class TestTheQuotaIsRealConfig:
             suppression.reason is SuppressionReason.TOPICAL_UNOPENED
             for suppression in context.research.diagnostics.suppressions
         )
+
+
+class TestDiscoveryHearsAboutItsOwnDrift:
+    """A turn that is told only "these were open questions" keeps finding
+    open questions, and the busiest of those ask the criterion-free version
+    of the research question. The tally carries the second number so the
+    next turn can correct while it still has queries left."""
+
+    async def test_the_running_off_criterion_count_reaches_the_tally(self) -> None:
+        context = _context(model=Model(turns=3, criterion_match=False))
+
+        await run_strands(context, batch_size=20, max_concurrent_calls=8)
+
+        assert context.data["triage_tally"]["off_criterion"] == 3
+        assert context.research.statistics["documents_off_criterion"] == 3
+
+    async def test_a_run_that_stayed_on_question_reports_no_drift(self) -> None:
+        context = _context(model=Model(turns=3))
+
+        await run_strands(context, batch_size=20, max_concurrent_calls=8)
+
+        assert context.data["triage_tally"]["off_criterion"] == 0
+        assert context.research.statistics["documents_off_criterion"] == 0

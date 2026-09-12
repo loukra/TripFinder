@@ -95,3 +95,41 @@ class TestPrompt:
 
         assert all(f"id=d{index}" in prompt for index in range(3))
         assert "Threads (3)" in prompt
+
+
+class TestTheCriterionIsAskedAsAQuestionNotAsAWord:
+    """A measured run on "most underrated US states for nature" returned
+    California, Washington, Utah, Alaska and Oregon — a correct count of a
+    different question. 35 of the 51 threads it admitted asked which state
+    is *best*, and triage reported ``criterion_match`` true for 100 of 103
+    documents, because the prompt asked only whether a thread "reflects the
+    research criteria" and a best-nature thread does."""
+
+    def test_the_research_question_is_stated_verbatim(self) -> None:
+        prompt = build_triage_prompt(make_plan(), [make_document("d1")], now=NOW)
+
+        assert "underrated us states for nature" in prompt
+
+    def test_the_prompt_names_dropping_the_criteria_as_a_mismatch(self) -> None:
+        prompt = build_triage_prompt(make_plan(), [make_document("d1")], now=NOW)
+
+        assert "criteria are dropped" in prompt
+        assert "best" in prompt and "most famous" in prompt
+
+    def test_the_prompt_names_the_inverted_question_as_a_mismatch(self) -> None:
+        """"Which state is overrated?" is an open question at the right
+        granularity in the right scope, and its answers are the opposite of
+        a recommendation."""
+        prompt = build_triage_prompt(make_plan(), [make_document("d1")], now=NOW)
+
+        assert "inverted" in prompt
+        assert "overrated" in prompt
+
+    def test_the_prompt_allows_the_criterion_to_be_worded_differently(self) -> None:
+        """The gate is the question being asked, not the vocabulary — a
+        thread titled "hidden gem states?" carries the criterion without
+        using the research's word for it."""
+        prompt = build_triage_prompt(make_plan(), [make_document("d1")], now=NOW)
+
+        assert "hidden gem" in prompt
+        assert "not the vocabulary" in prompt

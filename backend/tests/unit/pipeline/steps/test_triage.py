@@ -350,7 +350,46 @@ class TestOutputAndAccounting:
             "documents_polling": 1,
             "documents_topical": 1,
             "documents_excluded": 1,
+            "documents_off_criterion": 0,
         }
+
+    async def test_threads_that_ask_a_different_question_are_counted(self) -> None:
+        """§0.1 applied to the corpus rather than to a single step. A run
+        whose threads asked "which state is best" instead of "which is
+        underrated" came back with a confident ranking of the famous
+        places, and the only way to see why was to read 51 triage reasons
+        by hand. The drift is a number on the run now."""
+        context = make_context(
+            llm=_batch(
+                _ai("d1"),
+                _ai("d2", criterion=False, reason="asks which state is best, not underrated"),
+                _ai("d3", criterion=False, reason="asks which state is overrated"),
+            )
+        )
+        context.data["documents"] = [
+            make_document(f"d{index}", title=QUIET_TITLE) for index in (1, 2, 3)
+        ]
+
+        await _step().run(context)
+
+        assert context.research.statistics["documents_off_criterion"] == 2
+        # And they are kept out of the pool, which is what makes the count
+        # worth reporting rather than merely interesting.
+        assert context.research.statistics["documents_polling"] == 1
+
+    async def test_a_leading_title_is_not_counted_as_a_different_question(self) -> None:
+        """"Oregon is underrated" asks the research's own question — it just
+        answers it in the title. That is what ``topical`` is for, and
+        counting it as a criterion mismatch would make the drift number
+        mean two different things."""
+        context = make_context()
+        context.data["documents"] = [make_document("d1", title="Oregon is underrated")]
+
+        await _step().run(context)
+
+        assert _decision(context, "d1").verdict is TriageVerdict.TOPICAL
+        assert _decision(context, "d1").criterion_match is True
+        assert context.research.statistics["documents_off_criterion"] == 0
 
     async def test_dropping_a_document_is_recorded_as_a_suppression(self) -> None:
         context = make_context()

@@ -219,7 +219,6 @@ class DocumentTriageStep:
                 document,
                 TriageVerdict.TOPICAL,
                 f"title names {named} at the target granularity, so it leads the answer",
-                criterion_match=False,
             )
 
         if _is_interrogative(document.title):
@@ -324,6 +323,20 @@ def record_triage_totals(
     statistics["documents_polling"] = len(polling)
     statistics["documents_topical"] = len(topical)
     statistics["documents_excluded"] = triaged - len(polling) - len(topical)
+    # How many threads asked a *different* question than the run's — the
+    # criteria dropped, or inverted. A measured run found the standard
+    # famous-places podium for a question about underrated ones, and the
+    # only way to see why was to read 51 triage reasons by hand: 35 of the
+    # threads admitted as polling asked "which is best", not "which is
+    # underrated". A run that drifts this way does not come back thin, it
+    # comes back confident and about the wrong thing, so the drift has to
+    # be a number on the run and not a thing a reader could reconstruct
+    # (§0.1).
+    statistics["documents_off_criterion"] = sum(
+        1
+        for decision in context.research.diagnostics.triage_decisions
+        if not decision.criterion_match
+    )
 
     if triaged and len(polling) / triaged < floors.min_polling_document_ratio:
         context.research.diagnostics.raise_flag(ResearchFlag.LOW_POLLING_DOCUMENT_RATIO)

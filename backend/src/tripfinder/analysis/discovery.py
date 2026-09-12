@@ -20,6 +20,17 @@ pre-determined. In a measured run, 74 of 106 threads found were topical and
 could not contribute a single counted opinion. The model is told that, and
 told how the last turns scored, because a query is worth nothing here unless
 it finds a thread where many different people answer.
+
+**And it has to be the right question.** Telling the model to hunt for
+threads where many people answer, without insisting on the criteria, gets
+exactly what it asks for: the next measured run doubled the pool to 1223 and
+answered a different question, because "what state has the best nature"
+threads are easier to find and far busier than "which state is underrated"
+ones. The prompt's own examples were part of it — one of them was *"what is
+your favourite and why?"*, a criterion-free question. So the research
+question now goes into the prompt verbatim, the criteria are stated as a
+requirement rather than as context, and each turn is told how many of its
+own threads have already drifted, while it can still correct.
 """
 
 from __future__ import annotations
@@ -51,15 +62,24 @@ def build_discovery_prompt(
     queries_per_turn: int = 1,
     polling_found: int = 0,
     topical_found: int = 0,
+    off_criterion: int = 0,
 ) -> str:
     """The prompt sent to the LLM for one discovery turn (plan §6 step 3)."""
     issued = "\n".join(f"- {query}" for query in issued_queries) or "(none yet)"
-    scored = (
-        f"Of the threads found so far, {polling_found} are open questions that "
-        f"count and {topical_found} are not."
-        if polling_found or topical_found
-        else "No thread has been classified yet."
-    )
+    if polling_found or topical_found:
+        scored = (
+            f"Of the threads found so far, {polling_found} are open questions "
+            f"that count and {topical_found} are not."
+        )
+        if off_criterion:
+            scored += (
+                f" {off_criterion} of them ask a different question than this "
+                "research does — they dropped the criteria, or inverted them. "
+                "Those are the ones your queries are drifting towards; correct "
+                "for it in this turn."
+            )
+    else:
+        scored = "No thread has been classified yet."
     return (
         "You are conducting agentic search discovery for a travel-opinion "
         f"research run. Propose up to {queries_per_turn} new search queries, "
@@ -74,13 +94,22 @@ def build_discovery_prompt(
         f"Reddit threads found so far: {documents_found}. {scored}\n\n"
         "**What counts.** This research counts how many different people "
         "recommend something, so the only threads worth finding are ones "
-        f"where many people answer an open question about {plan.scope.value} "
-        f"at {plan.entity_granularity.value} level — *\"which one is most "
-        "underrated?\"*, *\"what is your favourite and why?\"*. A thread "
-        "about one particular place, a trip report, a news article or a "
-        "photo post contributes nothing, however relevant it reads: nobody "
-        "is answering a question in it. One good open question is worth ten "
-        "of those.\n\n"
+        "where many people answer *this* question in the open:\n\n"
+        f"    {plan.normalized_query}\n\n"
+        "A thread about one particular place, a trip report, a news article "
+        "or a photo post contributes nothing, however relevant it reads: "
+        "nobody is answering a question in it. One good open question is "
+        "worth ten of those.\n\n"
+        "**The criteria are not decoration, and this is where a discovery "
+        "run goes wrong.** A query that keeps the topic but drops the "
+        f"criteria ({', '.join(plan.criteria) or '(none)'}) finds threads "
+        "that answer a *different* question, and those threads are both "
+        "easier to find and far busier — so their answers, the famous and "
+        "obvious ones this research exists to see past, end up deciding the "
+        "ranking. Every query you propose must carry the criteria, in those "
+        "words or a natural synonym of them. Never propose the opposite "
+        "question either: threads arguing about what is overrated, "
+        "disappointing or worst are not a source of recommendations.\n\n"
         f"Propose up to {queries_per_turn} new queries, each meaningfully "
         "different from every query already searched and from each other, "
         "or set should_continue=false. Never propose a query that is "
@@ -92,7 +121,8 @@ def build_discovery_prompt(
         "find a Reddit thread where people discuss this: a natural phrase, "
         "not keywords. Phrase most of them the way somebody would *ask* the "
         "question, since that is what finds the threads where people answer "
-        "it. Vary the angle across the batch - one around a specific "
-        "criterion, one around the words enthusiasts would use, one as the "
-        "plainest form of the question."
+        "it. Vary the vocabulary across the batch, never the question: one "
+        "in the plainest words, one in the words enthusiasts would use, one "
+        "around a specific criterion - but all of them asking the research "
+        "question above."
     )

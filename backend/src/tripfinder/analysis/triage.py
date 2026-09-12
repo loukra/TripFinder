@@ -8,6 +8,19 @@ Everything that bounds or overrides the model's answer is deterministic and
 lives in ``pipeline.steps.triage``: the pre-checks that short-circuit this
 call entirely, the confidence floor, and the rule that a document may only
 ever be downgraded, never promoted.
+
+**The criterion is the gate that matters.** Scope and granularity are
+checkable facts; whether a thread asks *this* question is a judgement, and
+the first version of this prompt asked for it in five words — "the thread
+reflects the research criteria" — which almost everything does. A measured
+run on "most underrated US states for nature" came back with California,
+Washington, Utah, Alaska and Oregon, because 35 of the 51 threads it
+admitted asked which state is *best*, one asked which is *overrated*, and
+triage marked 100 of 103 as matching the criteria. The ranking was not thin
+or broken: it was a correct count of the wrong question. So the definition
+below is long, names both failure modes, and says why the stakes are
+asymmetric - threads that drop the criteria are busier than the ones that
+keep them, so admitting them does not add noise, it decides the outcome.
 """
 
 from __future__ import annotations
@@ -68,6 +81,7 @@ def build_triage_prompt(
         "opinions, but the thread chose the answer before anyone replied.\n"
         "- exclude: not about travel recommendations at all, or otherwise "
         "useless as evidence for this research.\n\n"
+        f"The research question: {plan.normalized_query}\n"
         f"Research topic: {plan.topic}\n"
         f"Criteria: {', '.join(plan.criteria) or '(none)'}\n"
         f"Geographic scope: {plan.scope.type} = {plan.scope.value}\n"
@@ -75,7 +89,25 @@ def build_triage_prompt(
         "For each thread also report, independently of the verdict:\n"
         "- scope_match: the thread is inside the geographic scope above\n"
         "- granularity_match: the thread answers at the target granularity\n"
-        "- criterion_match: the thread reflects the research criteria\n"
+        "- criterion_match: somebody answering this thread would be "
+        "answering the research question above, criteria included. This is "
+        "the one that is easiest to wave through and the one that decides "
+        "whether the final answer is about the right thing, so judge it "
+        "strictly. Two ways a thread fails it while still looking "
+        "relevant:\n"
+        "  * **The criteria are dropped.** If the research asks which ones "
+        "are most underrated, a thread asking which are best, most famous, "
+        "most beautiful or most popular is a different question. Its "
+        "answers are exactly the well-known ones the research is trying to "
+        "see past, and there will be far more of them, so admitting it does "
+        "not merely add noise - it decides the ranking.\n"
+        "  * **The question is inverted.** A thread asking which ones are "
+        "overrated, worst or disappointing is not a source of "
+        "recommendations. Its answers are what people argue against, and "
+        "counting them would turn the result upside down.\n"
+        "  A thread may use different words than the research does - "
+        "\"hidden gem\", \"sleeper\", \"nobody talks about\" all ask for the "
+        "underrated. Judge the question being asked, not the vocabulary.\n"
         "- confidence: 0.0-1.0 in your verdict\n"
         "- reason: one sentence, which a human will read when explaining a "
         "thin result\n\n"

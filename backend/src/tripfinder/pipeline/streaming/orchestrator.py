@@ -118,11 +118,23 @@ async def run_strands(
             topical.extend(wave_topical)
             # Discovery's next turn reads this (§4.5: only polling threads
             # can contribute a counted opinion, and in the measured run 74
-            # of 106 could not). It steers a prompt and nothing else — no
-            # statistic, suppression or status is derived from it.
+            # of 106 could not). ``off_criterion`` is the second way a turn
+            # can waste its budget and the one that does damage rather than
+            # nothing: threads that ask the question with the criteria
+            # dropped are busier than the ones that keep them, so a run that
+            # drifts does not come back thin, it comes back confident and
+            # about the wrong question. Telling discovery its own drift
+            # while it can still correct is the cheapest place to catch it.
+            # It steers a prompt and nothing else — no statistic,
+            # suppression or status is derived from it.
             context.data["triage_tally"] = {
                 "polling": len(polling),
                 "topical": len(topical),
+                "off_criterion": sum(
+                    1
+                    for decision in context.research.diagnostics.triage_decisions
+                    if not decision.criterion_match
+                ),
             }
 
             for document, comment_class in (

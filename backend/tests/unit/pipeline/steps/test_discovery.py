@@ -461,6 +461,18 @@ class TestDiscoveryIsToldWhatItsThreadsWereWorth:
 
         assert "3 are open questions that count and 17 are not" in llm.prompts[-1]
 
+    async def test_a_turn_is_told_how_many_of_its_threads_asked_another_question(self) -> None:
+        """The tally's second number. A turn told only that its threads were
+        open questions will keep finding open questions — the busiest of
+        which ask the criterion-free version and decide the ranking."""
+        llm = _SpyLLM([_batch("first angle here"), _batch("second angle here"), _stop()])
+        context = _context(_plan(), llm=llm, search=_CountingSearch())
+        context.data["triage_tally"] = {"polling": 12, "topical": 4, "off_criterion": 9}
+
+        await AgenticDiscoveryStep().run(context)
+
+        assert "9 of them ask a different question" in llm.prompts[-1]
+
     async def test_the_first_turn_claims_no_tally_it_does_not_have(self) -> None:
         llm = _SpyLLM([_stop()])
         context = _context(_plan(), llm=llm, search=_CountingSearch())

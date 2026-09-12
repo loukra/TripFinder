@@ -86,3 +86,59 @@ def test_the_prompt_tells_the_model_not_to_write_search_operators() -> None:
     prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
 
     assert "do not write site:" in prompt
+
+
+class TestTheCriteriaAreARequirementNotContext:
+    """The first batched-discovery run doubled the respondent pool and
+    answered a different question: "what state has the best nature" threads
+    are easier to find and far busier than "which state is underrated"
+    ones, and this prompt's own examples used to include a criterion-free
+    *"what is your favourite and why?"*."""
+
+    def test_the_research_question_is_stated_verbatim(self) -> None:
+        prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+        assert "underrated us states for nature" in prompt
+
+    def test_every_query_is_required_to_carry_the_criteria(self) -> None:
+        prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+        assert "must carry the criteria" in prompt
+
+    def test_the_opposite_question_is_ruled_out(self) -> None:
+        prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+        assert "Never propose the opposite question" in prompt
+
+    def test_the_prompt_offers_no_criterion_free_example_question(self) -> None:
+        """The model follows the examples. A criterion-free one is an
+        instruction to drift."""
+        prompt = build_discovery_prompt(_plan(), issued_queries=[], documents_found=0)
+
+        assert "what is your favourite and why" not in prompt
+
+
+class TestATurnIsToldHowFarItHasDrifted:
+    def test_the_off_criterion_count_reaches_the_prompt(self) -> None:
+        prompt = build_discovery_prompt(
+            _plan(),
+            issued_queries=["best states for hiking"],
+            documents_found=20,
+            polling_found=14,
+            topical_found=6,
+            off_criterion=9,
+        )
+
+        assert "9 of them ask a different question" in prompt
+
+    def test_a_turn_that_has_not_drifted_is_not_told_that_it_has(self) -> None:
+        prompt = build_discovery_prompt(
+            _plan(),
+            issued_queries=["underrated states nature"],
+            documents_found=20,
+            polling_found=14,
+            topical_found=6,
+        )
+
+        assert "14 are open questions that count and 6 are not" in prompt
+        assert "ask a different question" not in prompt

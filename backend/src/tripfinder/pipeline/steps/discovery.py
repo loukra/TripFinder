@@ -126,7 +126,7 @@ async def discover_documents(
             context.research.diagnostics.raise_flag(ResearchFlag.BUDGET_LIMIT_REACHED)
             break
 
-        polling_found, topical_found = _triage_tally(context)
+        polling_found, topical_found, off_criterion = _triage_tally(context)
         turn = await context.llm.complete_structured(
             prompt=build_discovery_prompt(
                 plan,
@@ -135,6 +135,7 @@ async def discover_documents(
                 queries_per_turn=min(per_turn, budget.max_search_queries - len(issued_queries)),
                 polling_found=polling_found,
                 topical_found=topical_found,
+                off_criterion=off_criterion,
             ),
             response_model=DiscoveryTurnResponse,
         )
@@ -206,7 +207,7 @@ class AgenticDiscoveryStep:
         return context
 
 
-def _triage_tally(context: PipelineContext) -> tuple[int, int]:
+def _triage_tally(context: PipelineContext) -> tuple[int, int, int]:
     """How the threads found so far were classified, if anything has been.
 
     Discovery and triage run concurrently (§2.14.2), so this is a reading of
@@ -215,8 +216,12 @@ def _triage_tally(context: PipelineContext) -> tuple[int, int]:
     """
     tally = context.data.get("triage_tally")
     if not isinstance(tally, dict):
-        return 0, 0
-    return int(tally.get("polling", 0)), int(tally.get("topical", 0))
+        return 0, 0, 0
+    return (
+        int(tally.get("polling", 0)),
+        int(tally.get("topical", 0)),
+        int(tally.get("off_criterion", 0)),
+    )
 
 
 async def _hydrate(context: PipelineContext, post_ids: Sequence[str]) -> list[SourceDocument]:
