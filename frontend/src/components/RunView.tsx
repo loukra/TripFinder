@@ -55,6 +55,12 @@ export function RunView({ researchId }: { researchId: string }) {
   const [results, setResults] = useState<ResearchResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  // Whether this run's results have been asked for yet. A run opened cold
+  // from history is already finished, so its status arrives one render
+  // before its ranking does — and in that render "stopped early on purpose"
+  // is the only thing on the page, which reads as *and there is nothing to
+  // show*. It is not; it is a fetch in flight.
+  const [resultsChecked, setResultsChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   // Consecutive failed status fetches. A single blip — the API restarting,
@@ -84,6 +90,8 @@ export function RunView({ researchId }: { researchId: string }) {
     } catch (err) {
       if (optional) return;
       setError(err instanceof ApiError ? err.message : "could not load these results");
+    } finally {
+      setResultsChecked(true);
     }
   }, []);
 
@@ -243,7 +251,11 @@ export function RunView({ researchId }: { researchId: string }) {
 
   const awaitingClarification = run.status === "needs_clarification" && run.clarification !== null;
   const showResults = results !== null;
-  const showPlainTerminalMessage = !isRunning && !awaitingClarification && !showResults;
+  // A run whose status says it may have a ranking keeps its outcome sentence
+  // to itself until the ranking has been asked for and did not come.
+  const mightHaveResults = RESULTS_AVAILABLE_STATUSES.has(run.status) && !resultsChecked;
+  const showPlainTerminalMessage =
+    !isRunning && !awaitingClarification && !showResults && !mightHaveResults;
 
   // The progress column stays beside the ranking after the run finishes, so
   // that the top five does not jump up the page the moment it becomes final.

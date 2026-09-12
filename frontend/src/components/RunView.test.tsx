@@ -99,6 +99,31 @@ describe("A run at its own URL", () => {
     expect(api.getResults).toHaveBeenCalledWith("r1");
   });
 
+  // Opened cold, a finished run's status arrives one render before its
+  // ranking. In that render the §7.1 sentence alone reads as *and there is
+  // nothing to show* — which is a different claim from *this is still
+  // loading*, and the page must not make it by accident.
+  it("does not announce the outcome as if it were the whole answer while results load", async () => {
+    vi.mocked(api.getResearch).mockResolvedValue(
+      statusResponse({ status: "completed_partial", message: "Stopped early on purpose." })
+    );
+    let release: (value: ResearchResultsResponse) => void = () => {};
+    vi.mocked(api.getResults).mockImplementation(
+      () => new Promise<ResearchResultsResponse>((resolve) => (release = resolve))
+    );
+
+    render(<RunView researchId="r1" />);
+
+    await waitFor(() => expect(api.getResults).toHaveBeenCalledWith("r1"));
+    // The progress column may say where the run ended; the main column must
+    // not yet say that this is all there is.
+    expect(screen.queryByRole("region", { name: "Research outcome" })).not.toBeInTheDocument();
+
+    release({ ...resultsResponse, status: "completed_partial", message: "Stopped early on purpose." });
+
+    expect(await screen.findByText("Alaska")).toBeInTheDocument();
+  });
+
   it("says plainly that there is no run with this id", async () => {
     vi.mocked(api.getResearch).mockRejectedValue(
       new api.ApiError(404, { detail: "research not found" })
