@@ -11,9 +11,13 @@ dropped rather than attributed to a corpus it might not belong to.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
-from builders.phase7 import make_comment, make_context
+from pydantic import BaseModel
+
+from builders.phase7 import make_comment, make_context, make_plan
 from tripfinder.analysis.comment_analysis import CommentAnalysis, EntityMention
+from tripfinder.analysis.entity_resolution import EntityResolutionBatch, ResolvedName
 from tripfinder.domain.config import RankingConfig, ResearchConfig
 from tripfinder.domain.models import EntityType, ReasonCode, Stance
 from tripfinder.pipeline.base import PartialResults, PipelineContext
@@ -41,6 +45,54 @@ def _analysis(comment_id: str, name: str) -> CommentAnalysis:
             )
         ],
     )
+
+
+def _park(comment_id: str, name: str) -> CommentAnalysis:
+    analysis = _analysis(comment_id, name)
+    return analysis.model_copy(
+        update={
+            "mentions": [
+                analysis.mentions[0].model_copy(update={"entity_type": EntityType.PARK})
+            ]
+        }
+    )
+
+
+class CountingResolver:
+    """Answers a resolution batch, and can be held open to expose a race."""
+
+    def __init__(self, hold: asyncio.Event | None = None) -> None:
+        self.calls = 0
+        self.hold = hold or asyncio.Event()
+        if hold is None:
+            self.hold.set()
+
+    async def complete_structured[T: BaseModel](
+        self, *, prompt: str, response_model: type[T]
+    ) -> T:
+        self.calls += 1
+        await self.hold.wait()
+        answer = EntityResolutionBatch(
+            items=[
+                ResolvedName(
+                    surface_form=form,
+                    canonical_name=f"{form} National Park",
+                    confidence=0.95,
+                    reason="a national park by that name",
+                )
+                for form in ("Canyonlands", "Great Basin")
+                if f"surface_form: {form}" in prompt
+            ]
+        )
+        assert isinstance(answer, response_model)
+        return answer
+
+
+class FailingResolver:
+    async def complete_structured[T: BaseModel](
+        self, *, prompt: str, response_model: type[T]
+    ) -> T:
+        raise RuntimeError("the provider is down")
 
 
 class Listener:
@@ -224,3 +276,61 @@ class TestARunWithNowhereToSendSnapshots:
         counted, evidence = accumulator.corpus()
         assert [analysis.comment_id for analysis in counted] == ["c1"]
         assert evidence == []
+
+
+class TestItPlacesNamesWhileItReads:
+    """Plan §2.13 forbids a snapshot from calling the model, which left the
+    provisional ranking able to show only what the alias table holds — the
+    fifty US states, and nothing else. The run therefore puts names to the
+    model *as it reads*, into a cache the snapshot reads for free
+    (``streaming/resolution.py``)."""
+
+    async def test_a_finished_batch_starts_placing_the_names_it_raised(self) -> None:
+        context, _ = _context()
+        context.data["plan"] = make_plan(EntityType.PARK)
+        llm = CountingResolver()
+        context = replace(context, llm=llm)
+        accumulator = Accumulator(context)
+        accumulator.register([make_comment("c1")], comment_class=CommentClass.COUNTED)
+
+        await accumulator.batch_finished({"c1": _park("c1", "Canyonlands")})
+        await accumulator.settle()
+
+        assert llm.calls == 1
+        cache = context.data["resolution_cache"]
+        assert cache.knows("Canyonlands")
+
+    async def test_a_second_batch_does_not_start_a_second_placing_at_once(self) -> None:
+        """Single-flight, for the same reason the snapshot itself is: eighty
+        strands landing together must not mean eighty model calls."""
+        context, _ = _context()
+        context.data["plan"] = make_plan(EntityType.PARK)
+        llm = CountingResolver(hold=asyncio.Event())
+        context = replace(context, llm=llm)
+        accumulator = Accumulator(context)
+        accumulator.register(
+            [make_comment("c1"), make_comment("c2", user_id="u2")],
+            comment_class=CommentClass.COUNTED,
+        )
+
+        await accumulator.batch_finished({"c1": _park("c1", "Canyonlands")})
+        await accumulator.batch_finished({"c2": _park("c2", "Great Basin")})
+        llm.hold.set()
+        await accumulator.settle()
+
+        assert llm.calls == 1
+
+    async def test_a_failure_while_placing_names_does_not_fail_the_run(self) -> None:
+        """The worst a missing name costs is a thinner snapshot: the final
+        resolution step asks about whatever the cache does not hold."""
+        context, listener = _context()
+        context.data["plan"] = make_plan(EntityType.PARK)
+        context = replace(context, llm=FailingResolver())
+        accumulator = Accumulator(context)
+        accumulator.register([make_comment("c1")], comment_class=CommentClass.COUNTED)
+
+        await accumulator.batch_finished({"c1": _park("c1", "Canyonlands")})
+        await accumulator.settle()
+
+        assert context.data["resolution_cache"].knows("Canyonlands") is False
+        assert len(listener.received) == 1

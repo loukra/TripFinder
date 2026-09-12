@@ -671,6 +671,41 @@ changes *when* evidence arrives; 14.7 establishes *whether it can be shown at al
 about what a half-finished answer may claim. Reordering first would mean faster evidence and still no
 way to put it on screen.
 
+#### 2.13.5 The catalogue was the whole preview — **corrected in Phase 14.9**
+
+§2.13.2 forbids a snapshot from calling the model, which is right: it runs after every analysis
+batch, and a batch of model calls per snapshot is a second run, not a preview. Entity resolution was
+therefore given its deterministic half inside a snapshot — normalisation plus the alias table
+(`ask_model=False`).
+
+**The alias table holds one tier: the fifty US states.** So a snapshot could rank a question about
+states and *nothing else*. Every snapshot of every run about parks, countries, cities or islands
+resolved zero names and showed an empty list, for the whole run. Measured on a real run —
+`best national parks avoiding crowds`, 2026-09-12 — 1120 surface forms,
+`entity_forms_resolved_by_rule: 0`, and the first ranking the user saw arriving at 6:32 because it
+was the **final** one. 14.7's acceptance was demonstrated on a states question and every snapshot
+test used `EntityType.STATE`, so nothing caught it.
+
+The correction is not to let the snapshot ask. It is to **have already asked**. A run resolves the
+same names whether it does so at the end or as it goes, so the run now puts unplaced names to the
+model *while analysis is still running*, into a shared cache (`streaming/resolution.py`); the
+snapshot reads the cache and still calls nothing. Three rules keep it honest:
+
+1. **Priming decides nothing.** No resolution, entity, suppression, status or ranking is written by
+   it — those belong to the run's own pass over a closed corpus (§2.13.2). The one thing it records
+   is how many malformed answers it discarded, because §0.1 does not exempt a call for being early.
+2. **A name is asked about once.** The cache is consulted by the final pass too, which asks only for
+   what is missing, so the calls move earlier rather than multiplying.
+3. **The first names are asked about however few they are**; after that, only whole batches, so a
+   run's thirteen resolution calls do not become seventy.
+
+It also removes most of a second measured defect: the same run spent roughly 210 s of its 392 s
+after analysis had stopped, in thirteen strictly sequential resolution calls, while the duration
+budget (180 s) governed only analysis dispatch and not the tail behind it. That the two defects had
+one cause is why they have one fix.
+
+---
+
 ---
 
 ### 2.14 One minute, and the first place has a hundred people behind it — **Phase 14.8 added**

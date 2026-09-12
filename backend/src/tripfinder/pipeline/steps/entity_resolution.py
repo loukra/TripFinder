@@ -70,6 +70,7 @@ from tripfinder.domain.models import (
     SuppressionReason,
 )
 from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.streaming.resolution import ResolutionCache
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,16 @@ class _Verdict:
     confidence: float
     reason: str
     suppression: SuppressionReason | None = None
+
+
+def resolution_cache(context: PipelineContext) -> ResolutionCache | None:
+    """The run's shared store of names the model has already placed, if it has one.
+
+    Absent outside a streaming run — a step asked to resolve a corpus with
+    no cache behaves exactly as it did before there was one.
+    """
+    cache = context.data.get("resolution_cache")
+    return cache if isinstance(cache, ResolutionCache) else None
 
 
 def _key(mention: EntityMention) -> _FormKey:
@@ -174,11 +185,7 @@ class EntityResolutionStep:
         questions = [
             _question(forms[key]) for key, verdict in verdicts.items() if verdict is None
         ]
-        verdicts.update(
-            await self._ask(context, plan, questions, config)
-            if self._ask_model
-            else _unasked(questions)
-        )
+        verdicts.update(await self._settle(context, plan, questions, config))
 
         settled = {key: verdict for key, verdict in verdicts.items() if verdict is not None}
         entities = _registry(settled.values())
@@ -250,16 +257,121 @@ class EntityResolutionStep:
 
     # -- 3. the model, for the remainder --------------------------------
 
-    async def _ask(
+    async def _settle(
         self,
         context: PipelineContext,
         plan: ResearchPlan,
         questions: Sequence[ResolutionQuestion],
         config: EntityResolutionConfig,
     ) -> dict[_FormKey, _Verdict]:
+        """Decide the forms the catalogue could not, from the cache or the model.
+
+        The cache is what makes a provisional ranking possible at all for a
+        question the catalogue does not cover (``streaming/resolution.py``):
+        a form already put to the model is settled here **without a call**,
+        in snapshot mode exactly as in the final one, by the same
+        :meth:`_apply`. What is left over is asked for only when this step
+        is allowed to ask; otherwise it stays unresolved, and the snapshot
+        under-reports in the direction plan §2.13.1 requires.
+        """
+        cache = resolution_cache(context)
+        known: list[ResolutionQuestion] = []
+        missing: list[ResolutionQuestion] = []
+        answers: dict[str, ResolvedName] = {}
+        for question in questions:
+            cached = cache.answer(question.surface_form) if cache is not None else None
+            if cache is not None and cache.knows(question.surface_form):
+                known.append(question)
+                if cached is not None:
+                    answers[question.surface_form] = cached
+            else:
+                missing.append(question)
+
+        if self._ask_model and missing:
+            answers.update(await self._ask(context, plan, missing, config))
+            decided = questions
+        else:
+            decided = known
+
+        verdicts = {
+            (question.surface_form, question.entity_type): self._apply(
+                question, answers.get(question.surface_form), config, plan
+            )
+            for question in decided
+        }
+        if not self._ask_model:
+            verdicts.update(_unasked(missing))
+        return verdicts
+
+    async def prime(
+        self,
+        context: PipelineContext,
+        *,
+        counted_analyses: Sequence[CommentAnalysis],
+        evidence_analyses: Sequence[CommentAnalysis],
+    ) -> int:
+        """Put this corpus's unplaced names to the model, into the cache only.
+
+        Called while analysis is still running (``streaming/accumulator.py``),
+        with the corpus passed in rather than read from ``context.data``,
+        because during a streaming run that key does not exist yet.
+
+        It decides nothing. No resolution, no entity, no diagnostic and no
+        status is written — those belong to the run's own pass over a closed
+        corpus (plan §2.13.2). The one thing it does record is how many
+        malformed answers it threw away, because that is a count of what
+        *this run* discarded in calls it genuinely made, and §0.1 does not
+        exempt a call for being early.
+
+        **The first call is made as soon as there is anything to place**,
+        however little — a run must not have to raise fifty names before it
+        can show one, and a question whose whole corpus names a dozen places
+        would otherwise never preview at all. After that, only whole batches
+        are asked for: a cache that called after every analysis batch would
+        turn a run's thirteen resolution calls into seventy, and cost is the
+        other complaint this codebase has to answer. Whatever is still
+        partial when analysis ends is swept up by this step's own final
+        pass — the same remainder it always asked for.
+        """
+        cache = resolution_cache(context)
+        if cache is None:
+            return 0
+
+        plan: ResearchPlan = context.data["plan"]
+        forms = self._collect([*counted_analyses, *evidence_analyses])
+        questions = [
+            _question(form)
+            for key, form in forms.items()
+            if self._pre_check(form, plan) is None and not cache.knows(form.surface_form)
+        ]
+        whole = len(questions) - len(questions) % self._batch_size
+        if whole == 0:
+            if cache or not questions:
+                return 0
+            whole = len(questions)  # the run's first names, however few
+
+        config = context.research.research_config.entity_resolution
+        await self._ask(context, plan, questions[:whole], config)
+        return whole
+
+    async def _ask(
+        self,
+        context: PipelineContext,
+        plan: ResearchPlan,
+        questions: Sequence[ResolutionQuestion],
+        config: EntityResolutionConfig,
+    ) -> dict[str, ResolvedName]:
+        """Put these forms to the model, a batch at a time, and remember the answers.
+
+        Every batch is written to the cache as it lands rather than at the
+        end, so a call that fails half way through leaves the run better
+        informed than it found it — and a snapshot taken in between sees the
+        names that *have* been placed.
+        """
         if not questions:
             return {}
 
+        cache = resolution_cache(context)
         answers: dict[str, ResolvedName] = {}
         discarded = 0
         for batch in _batched(questions, self._batch_size):
@@ -268,6 +380,7 @@ class EntityResolutionStep:
                 prompt=build_entity_resolution_prompt(plan, batch),
                 response_model=EntityResolutionBatch,
             )
+            landed: dict[str, ResolvedName] = {}
             for item in response.items:
                 if item.surface_form not in asked or item.surface_form in answers:
                     logger.warning(
@@ -276,15 +389,19 @@ class EntityResolutionStep:
                     )
                     discarded += 1
                     continue
-                answers[item.surface_form] = item
+                landed[item.surface_form] = item
+            answers.update(landed)
+            if cache is not None:
+                cache.remember(asked, landed)
 
-        context.research.statistics["entity_resolution_items_discarded"] = discarded
-        return {
-            (question.surface_form, question.entity_type): self._apply(
-                question, answers.get(question.surface_form), config, plan
-            )
-            for question in questions
-        }
+        # Accumulated, not assigned: priming asks in several passes while
+        # analysis runs, and a malformed answer discarded during one of them
+        # is as much a suppression as one discarded during the last (§0.1).
+        statistics = context.research.statistics
+        statistics["entity_resolution_items_discarded"] = (
+            statistics.get("entity_resolution_items_discarded", 0) + discarded
+        )
+        return answers
 
     def _apply(
         self,
