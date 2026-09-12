@@ -21,13 +21,19 @@ concurrent pipeline has to restate explicitly.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 
 from tripfinder.analysis.comment_analysis import CommentAnalysis
 from tripfinder.domain.models import Comment
 from tripfinder.pipeline.base import PartialResults, PipelineContext
 from tripfinder.pipeline.snapshot import snapshot
+from tripfinder.pipeline.steps.entity_resolution import EntityResolutionStep
 from tripfinder.pipeline.streaming.budget import CommentClass
+from tripfinder.pipeline.streaming.resolution import ResolutionCache
+
+logger = logging.getLogger(__name__)
 
 
 class Accumulator:
@@ -48,6 +54,9 @@ class Accumulator:
         self._batches = 0
         self._computing = False
         self._dirty = False
+        self._priming: asyncio.Task[int] | None = None
+        self._resolver = EntityResolutionStep()
+        context.data.setdefault("resolution_cache", ResolutionCache())
 
     def register(self, comments: Sequence[Comment], *, comment_class: CommentClass) -> None:
         """Record which corpus these comments belong to, before they are analysed.
@@ -79,6 +88,7 @@ class Accumulator:
         """
         self._analyses.update(analyses)
         self._batches += 1
+        self._prime()
         if self._context.on_partial_results is None:
             return
 
@@ -94,6 +104,47 @@ class Accumulator:
                     return
         finally:
             self._computing = False
+
+    def _prime(self) -> None:
+        """Start placing the names this batch raised, if nothing is placing already.
+
+        Resolution used to run once, after every analysis call had finished,
+        which had two consequences and they were the same consequence: the
+        run spent minutes in a sequential tail doing nothing else, and every
+        snapshot until then ranked only what the catalogue could place by
+        itself — nothing at all, for any question that is not about US
+        states (``streaming/resolution.py``).
+
+        Asking *while* analysis runs fixes both. It is fire-and-forget on
+        purpose: a strand that has just finished a batch must not wait for a
+        model call it does not need, and a snapshot taken meanwhile simply
+        sees whichever names have landed. A failure here costs a snapshot
+        some entities and nothing else — the final resolution step asks for
+        whatever is still missing, exactly as it always did.
+        """
+        if self._priming is not None and not self._priming.done():
+            return
+        self._priming = asyncio.create_task(self._prime_once())
+
+    async def _prime_once(self) -> int:
+        counted, evidence = self.corpus()
+        try:
+            return await self._resolver.prime(
+                self._context, counted_analyses=counted, evidence_analyses=evidence
+            )
+        except Exception:
+            # A name the cache does not hold is a name the final resolution
+            # step will ask about, so the worst this costs is a thinner
+            # snapshot. It is never a reason to fail a run that is reading
+            # perfectly well.
+            logger.warning("resolution: priming the name cache failed", exc_info=True)
+            return 0
+
+    async def settle(self) -> None:
+        """Wait for an in-flight priming call, so nothing outlives the run."""
+        if self._priming is not None:
+            await self._priming
+            self._priming = None
 
     def corpus(self) -> tuple[list[CommentAnalysis], list[CommentAnalysis]]:
         """Everything analysed so far, in corpus order: counted, then evidence."""

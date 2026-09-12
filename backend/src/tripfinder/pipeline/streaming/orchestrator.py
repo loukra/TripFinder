@@ -190,6 +190,10 @@ async def run_strands(
         topical=topical,
         floors=config.triage_floors,
     )
+    # A priming call started by the last analysis batch is still worth
+    # having — the names it places are names the final resolution step then
+    # does not have to ask about — and nothing may outlive this function.
+    await accumulator.settle()
     _publish(context, accumulator, budget, outcomes)
     reassess_after_analysis(context, comments_analyzed=len(accumulator.corpus()[0]))
     return list(outcomes)

@@ -8,6 +8,7 @@ import type {
   EntityType,
   EvidenceResponse,
   ResearchCreateResponse,
+  ResearchListResponse,
   ResearchResultsResponse,
   ResearchStatusResponse,
 } from "./types";
@@ -58,6 +59,13 @@ export function createResearch(query: string): Promise<ResearchCreateResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
   });
+}
+
+// Past runs, newest first (plan §2.15). A pure read: listing history never
+// starts a run and never costs a model call.
+export function listResearch(limit: number, offset: number): Promise<ResearchListResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return fetchJson<ResearchListResponse>(`/api/research?${params}`);
 }
 
 export function getResearch(id: string): Promise<ResearchStatusResponse> {

@@ -671,6 +671,41 @@ changes *when* evidence arrives; 14.7 establishes *whether it can be shown at al
 about what a half-finished answer may claim. Reordering first would mean faster evidence and still no
 way to put it on screen.
 
+#### 2.13.5 The catalogue was the whole preview — **corrected in Phase 14.9**
+
+§2.13.2 forbids a snapshot from calling the model, which is right: it runs after every analysis
+batch, and a batch of model calls per snapshot is a second run, not a preview. Entity resolution was
+therefore given its deterministic half inside a snapshot — normalisation plus the alias table
+(`ask_model=False`).
+
+**The alias table holds one tier: the fifty US states.** So a snapshot could rank a question about
+states and *nothing else*. Every snapshot of every run about parks, countries, cities or islands
+resolved zero names and showed an empty list, for the whole run. Measured on a real run —
+`best national parks avoiding crowds`, 2026-09-12 — 1120 surface forms,
+`entity_forms_resolved_by_rule: 0`, and the first ranking the user saw arriving at 6:32 because it
+was the **final** one. 14.7's acceptance was demonstrated on a states question and every snapshot
+test used `EntityType.STATE`, so nothing caught it.
+
+The correction is not to let the snapshot ask. It is to **have already asked**. A run resolves the
+same names whether it does so at the end or as it goes, so the run now puts unplaced names to the
+model *while analysis is still running*, into a shared cache (`streaming/resolution.py`); the
+snapshot reads the cache and still calls nothing. Three rules keep it honest:
+
+1. **Priming decides nothing.** No resolution, entity, suppression, status or ranking is written by
+   it — those belong to the run's own pass over a closed corpus (§2.13.2). The one thing it records
+   is how many malformed answers it discarded, because §0.1 does not exempt a call for being early.
+2. **A name is asked about once.** The cache is consulted by the final pass too, which asks only for
+   what is missing, so the calls move earlier rather than multiplying.
+3. **The first names are asked about however few they are**; after that, only whole batches, so a
+   run's thirteen resolution calls do not become seventy.
+
+It also removes most of a second measured defect: the same run spent roughly 210 s of its 392 s
+after analysis had stopped, in thirteen strictly sequential resolution calls, while the duration
+budget (180 s) governed only analysis dispatch and not the tail behind it. That the two defects had
+one cause is why they have one fix.
+
+---
+
 ---
 
 ### 2.14 One minute, and the first place has a hundred people behind it — **Phase 14.8 added**
@@ -747,6 +782,72 @@ different threads — and the measured pool of 417 additionally leaves ranks 2 t
 inseparable (New York vs Oregon: 0.65 sigma). 14.8 makes runs *bigger and faster*, which narrows the
 second problem and not the first. Naming it here so that a later phase inherits a stated problem
 rather than rediscovering it.
+
+### 2.15 A run is answered once and kept — **Phases 14.9, 14.10, 14.11 added**
+
+Every run this product has ever performed is already in the `research` table: the question, the
+plan, the ranking, the statistics, the diagnostics. None of it can be reached again. A finished
+run lives exactly as long as the browser tab that started it, and the only way to look at an answer
+a second time is to buy it a second time.
+
+That cost two real verification cycles during 14.8 — twice a result was on screen without the
+explanations it had in fact produced, and both times the only way to check was to pay for another
+run. It also makes the product quietly dishonest about its own economics: a question asked twice in
+a week is answered twice, from a corpus of Reddit threads up to fifteen years old that did not
+change in between.
+
+Three phases, in this order, and the order is the argument.
+
+**14.9 — history.** A list of past runs, and a URL per run. This is almost entirely exposure: the
+data is stored, the results endpoint already serves any id, and the frontend simply has no route to
+reach one. It is first because everything after it needs a way to show the user a run that is not
+the one they just started — a reused answer is useless if it cannot be opened, compared, or
+distrusted.
+
+**14.10 — answering a question that has already been answered.** The reuse key is **not** the raw
+text: "best states for nature" and "Best states for nature?" are the same question and would miss
+each other. It is the **plan** — normalised query, scope, granularity, criteria — which Query
+Understanding produces anyway, for one call out of roughly a hundred and thirty. Paying one cheap
+call to skip the other hundred and twenty-nine is the trade, and it has the property raw text cannot
+have: two differently worded questions that mean the same thing land on the same answer.
+
+The window is **six months**, configurable. That is long, deliberately. The corpus is Reddit threads
+admitted up to fifteen years old; a fortnight changes nothing in it, and the honest constraint on
+reuse is not freshness but consent — the user must always be able to say *no, run it again*, and must
+never be shown an old answer that looks new.
+
+So two rules govern reuse, and they are not negotiable:
+
+1. **A reused answer says when it was produced**, on the page, in the same place a provisional run
+   says it is provisional. §2.13.2 established that display state must never be mistaken for a fresh
+   finding; an answer from March presented as an answer from today is that same error with a longer
+   fuse.
+2. **A fresh run is always one click away**, and it never consults the cache.
+
+This phase also records what each call spent, because that is what turns "the cache saves money"
+from an assertion into a reading. Nothing in this codebase counts a token today. The totals are the
+minimum needed to compare a hit against a miss; deciding what to *do* about the number is 14.11's
+job, not this one's.
+
+**14.11 — a cap on spend.** `maxEstimatedCostUsd` has been in `ResearchBudget` since Phase 1 and is
+read by no line of code — a knob that lies, which is the same failure this plan forbids everywhere
+else. Measured across two real runs the shape is already clear: 85–126 analysis calls against
+3 342–3 996 comments, and every other step combined is about thirty calls. This phase makes the knob
+real, and adds the provider-side prompt caching the analysis prefix is already shaped for — the
+instructions and plan are byte-identical across every batch of a run, and only the comments change.
+
+**A cap on LLM spend is possible, but not exactly.** No provider will say what a call costs before it
+is made. What is available is the exact usage of every call *after* it returns, and a local token
+count of a prompt *before* it is sent. So the cap is enforced the way `maxResearchDuration` already
+is — as an admission rule, not a guarantee. Before each analysis batch, the estimated input cost plus
+the worst case for `maxOutputTokens` is checked against what is left in the purse; if it does not
+fit, the batch is never dispatched and the refusal is recorded. A run can overshoot by at most the
+one batch that was in flight, and it can never overshoot silently. This is the same shape as §2.12.2's
+admission deadline, and it belongs in the same purse.
+
+It is **last** because a cap is a policy about a number, and the number arrives in 14.10. Ordering it
+earlier would mean choosing a limit before anything had measured what a run actually spends.
+
 
 ---
 
@@ -1286,7 +1387,10 @@ Each phase ends with a report (§12) and a stop. Phases 0–3.5 require no netwo
 | **14.6** | **Throughput and sampling breadth** | 14.5 | **§2.12. Enum reason codes replace prose, concurrent analysis batches, configurable `reasoning.effort` (default `low`), per-batch failure isolation, per-thread sampling with comment `score`, `maxResearchDuration` enforced as an admission gate (in-flight work always finishes), fuzzy quote verification + audit trail** |
 | **14.7** | **Streaming provisional results** | 14.6 | **§2.13. Snapshot function re-running steps 8-11 over the partial corpus with no model call, a snapshot emitted after every analysis batch (single-flight, coalesced, sequence-guarded), `analyzing` served by `/results` as `provisional` with `share: null` and the weak list alongside, a provisional results view that fills before it reorders** |
 | **14.8** | **Parallel strands** | 14.7 | **§2.14. One document = one strand, carried end to end and concurrently; shared budget and shared denominator replace the sequential step list for §4.6 steps 5-7; per-document comment cap; topical quota replaces polling-first ordering; health gate plus continuous reading; granularity-restricted analysis prompt** |
-| 15 | Evaluation | 14.6, 14.7, 14.8 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
+| **14.9** | **Run history** | 14.8 | **§2.15. A list of past runs and a URL per run; the results a run already produced are reachable without re-running it** |
+| **14.10** | **Answering a question once** | 14.9 | **§2.15. Reuse keyed on the research plan, not the raw text; six-month window; a reused answer is dated on the page and a fresh run is always available; token usage recorded per run, so the saving is read rather than claimed** |
+| **14.11** | **A cap on spend** | 14.10 | **§2.15. `maxEstimatedCostUsd` enforced as an admission rule in the purse; per-step cost attribution; provider-side prompt caching for the analysis prefix** |
+| 15 | Evaluation | 14.6, 14.7, 14.8, 14.10 | Benchmark queries, precision measurement, cost/latency, weakest-stage analysis |
 
 ### Notable phase details
 
@@ -1405,13 +1509,45 @@ and none is admitted before `minPostsRetrieved` documents have been fetched; **(
 `entity_mentions_off_granularity` falls to **under 10 %** of `entity_mentions_total`, from 57 %.
 Stability across runs is explicitly **not** an acceptance criterion (§2.14.4).
 
+**Phase 14.9 — acceptance (§2.15):** a run started, finished and then navigated away from can be
+reopened at its own URL and shows the same ranking, explanations, statistics and diagnostics it
+showed when it finished, with no new model or source call made; a history page lists past runs
+newest first with their question, date and outcome, and distinguishes a `completed` run from a
+`completed_partial`, `failed` or `cancelled` one at a glance; a run still in flight is reachable at
+the same URL and shows its progress rather than a dead page; and the history page says plainly when
+it is empty rather than rendering as though it had failed to load.
+
+**Phase 14.10 — acceptance (§2.15):** a question whose plan matches a `completed` run inside the
+reuse window returns that run's answer without a discovery, retrieval or analysis call; a question
+worded differently but with an identical plan hits the same run, and one whose scope, granularity or
+criteria differ does not; a run older than the window is never reused; a reused answer is labelled
+with the date it was produced, everywhere that answer is shown, and a test proves the label cannot be
+absent; asking for a fresh run bypasses the cache entirely and produces a new run with its own id,
+leaving the old one intact in the history; a cache hit on a `completed_partial`, `failed` or
+`cancelled` run is refused — only a run that actually finished may answer for a later question; and
+every LLM call records the tokens it used and the run carries the totals in `statistics`, so the
+saving a hit produces is a number on the two runs rather than a claim about them.
+
+**Phase 14.11 — acceptance (§2.15):** `maxEstimatedCostUsd` refuses to admit an analysis batch
+whose estimated cost does not fit what is left in the purse, records the refusal as a suppression
+with its count and the limit that bound it, and yields `completed_partial` naming cost as the
+limiting factor — never `completed`; a test proves a run stopped by cost is distinguishable from one
+that genuinely found little (§0.1); a run that would exceed its cap by a single in-flight batch
+finishes that batch and dispatches no other; per-step cost attribution is visible, so the claim that
+analysis dominates a run is read off the run rather than assumed; and prices live in config, never in
+`domain/`.
+
 ---
 
 ## 11. API surface
 
 ```
-POST   /api/research                    -> {id, status}
-GET    /api/research/{id}               -> status, progress, statistics, budget used
+POST   /api/research                    -> {id, status}   (14.10: may answer from a previous run;
+                                           `fresh=true` never does)
+GET    /api/research                    -> 14.9: past runs, newest first, paginated
+GET    /api/research/{id}               -> status, progress, statistics, budget used, and
+                                           (14.9) the question asked and the date it was asked,
+                                           since a run is now opened by people who did not start it
 POST   /api/research/{id}/clarify       -> answer a ClarificationRequest, resume
 GET    /api/research/{id}/results       -> ranked results, strong and weak (§2.13.3: also
                                            served while `analyzing`, flagged `provisional`)

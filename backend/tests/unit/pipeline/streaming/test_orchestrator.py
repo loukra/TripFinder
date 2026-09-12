@@ -20,13 +20,14 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, HttpUrl
 
-from builders.phase7 import make_comment, make_context
+from builders.phase7 import make_comment, make_context, make_plan
 from tripfinder.analysis.comment_analysis import (
     CommentAnalysis,
     CommentAnalysisBatch,
     EntityMention,
 )
 from tripfinder.analysis.discovery import DiscoveryTurnResponse
+from tripfinder.analysis.entity_resolution import EntityResolutionBatch, ResolvedName
 from tripfinder.analysis.triage import DocumentTriage, DocumentTriageBatch
 from tripfinder.domain.config import (
     RankingConfig,
@@ -44,7 +45,8 @@ from tripfinder.domain.models import (
     TriageVerdict,
 )
 from tripfinder.domain.ports import WebSearchHit, WebSearchQuery
-from tripfinder.pipeline.base import PipelineContext
+from tripfinder.pipeline.base import PartialResults, PipelineContext
+from tripfinder.pipeline.steps.entity_resolution import EntityResolutionStep
 from tripfinder.pipeline.streaming.orchestrator import run_strands
 
 BODY = "Michigan is stunning in autumn and almost nobody ever goes there."
@@ -123,13 +125,16 @@ class Model:
         verdict: TriageVerdict = TriageVerdict.POLLING,
         criterion_match: bool = True,
         block_search_until_analysed: bool = False,
+        names: tuple[str, EntityType] = ("Michigan", EntityType.STATE),
     ) -> None:
         self._turns = turns
         self._verdict = verdict
         self._criterion_match = criterion_match
         self._block = block_search_until_analysed
+        self._name, self._entity_type = names
         self.search_turns = 0
         self.analysis_calls = 0
+        self.resolution_calls = 0
         self.analysis_started = asyncio.Event()
 
     async def complete_structured[T: BaseModel](
@@ -168,6 +173,22 @@ class Model:
                     for document_id in re.findall(r"id=(doc\d+)", prompt)
                 ]
             )
+        if response_model is EntityResolutionBatch:
+            # Only a name the alias table cannot place ever reaches here —
+            # which, for any question that is not about US states, is every
+            # name in the corpus.
+            self.resolution_calls += 1
+            await asyncio.sleep(0)
+            return EntityResolutionBatch(  # type: ignore[return-value]
+                items=[
+                    ResolvedName(
+                        surface_form=self._name,
+                        canonical_name=f"{self._name} National Park",
+                        confidence=0.95,
+                        reason="a national park by that name",
+                    )
+                ]
+            )
         self.analysis_calls += 1
         self.analysis_started.set()
         await asyncio.sleep(0)
@@ -182,8 +203,8 @@ class Model:
                     reason_code=ReasonCode.RECOMMENDS,
                     mentions=[
                         EntityMention(
-                            raw_text="Michigan",
-                            entity_type=EntityType.STATE,
+                            raw_text=self._name,
+                            entity_type=self._entity_type,
                             stance=Stance.POSITIVE,
                             strength=0.8,
                             supporting_quote=BODY,
@@ -405,3 +426,55 @@ class TestDiscoveryHearsAboutItsOwnDrift:
 
         assert context.data["triage_tally"]["off_criterion"] == 0
         assert context.research.statistics["documents_off_criterion"] == 0
+
+
+class TestItReportsWhileItReadsWhateverTheQuestionIs:
+    """The defect this class exists for: a provisional ranking that worked
+    for exactly one kind of question.
+
+    §2.13 forbids a snapshot from calling the model, so entity resolution ran
+    inside one deterministically — normalisation plus the alias table, and
+    the alias table holds the fifty US states and nothing else. Measured on a
+    real run about national parks: 1120 surface forms,
+    ``entity_forms_resolved_by_rule: 0``, every snapshot empty, and the first
+    ranking the user saw at 6:32 because it was the final one.
+    """
+
+    async def test_a_park_question_is_ranked_while_the_run_is_still_reading(self) -> None:
+        model = Model(names=("Canyonlands", EntityType.PARK))
+        context = _context(model=model)
+        context.data["plan"] = make_plan(EntityType.PARK)
+        partials: list[PartialResults] = []
+
+        async def listener(partial: PartialResults) -> None:
+            partials.append(partial)
+
+        context.on_partial_results = listener
+
+        await run_strands(context)
+
+        ranked = [
+            {result.entity_name for result in [*partial.results, *partial.weak_results]}
+            for partial in partials
+        ]
+        assert partials, "the run emitted no provisional results at all"
+        assert any(names == {"Canyonlands National Park"} for names in ranked), ranked
+        # The names were placed by calls the run made while it was reading,
+        # not by the final pass — which has not run yet.
+        assert model.resolution_calls >= 1
+
+    async def test_the_names_it_placed_are_not_asked_about_twice(self) -> None:
+        """The calls move earlier; they do not multiply (``streaming/resolution.py``)."""
+        model = Model(names=("Canyonlands", EntityType.PARK))
+        context = _context(model=model)
+        context.data["plan"] = make_plan(EntityType.PARK)
+
+        await run_strands(context)
+        placed = model.resolution_calls
+        await EntityResolutionStep().run(context)
+
+        assert placed == 1
+        assert model.resolution_calls == placed
+        assert [entity.canonical_name for entity in context.data["entities"]] == [
+            "Canyonlands National Park"
+        ]
