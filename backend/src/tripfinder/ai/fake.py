@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 
+from tripfinder.domain.usage import TokenLedger
+
 
 class FakeLLMProvider:
     """Returns the canned response(s) registered for a given response model type.
@@ -29,7 +31,10 @@ class FakeLLMProvider:
     def __init__(
         self,
         responses: Mapping[type[BaseModel], BaseModel | Sequence[BaseModel]] | None = None,
+        *,
+        ledger: TokenLedger | None = None,
     ) -> None:
+        self._ledger = ledger
         self._fixed: dict[type[BaseModel], BaseModel] = {}
         self._queues: dict[type[BaseModel], deque[BaseModel]] = {}
         for response_model, value in (responses or {}).items():
@@ -41,6 +46,14 @@ class FakeLLMProvider:
     async def complete_structured[T: BaseModel](
         self, *, prompt: str, response_model: type[T]
     ) -> T:
+        # A canned answer costs no tokens, and reporting *zero* would be a
+        # lie of a particular kind: it would make a run against this
+        # provider look like a run that spent nothing, rather than one
+        # nobody measured. ``record(None)`` counts the call and files its
+        # cost as unknown (plan §2.15).
+        if self._ledger is not None:
+            self._ledger.record(None)
+
         if response_model in self._queues:
             queue = self._queues[response_model]
             if not queue:

@@ -24,9 +24,15 @@ from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 # `parallel_strands` instead of queueing behind each other. Steps 8-11 stay
 # exactly where they were, and still run once, over everything the run
 # gathered.
+#
+# `answer_reuse` (§4.6 step 1.5, added in 14.10) sits immediately after
+# query understanding, which is both the earliest point at which the run
+# knows what its question means and the last point at which it has spent
+# nothing but that one call.
 _FULL_ORDER = [
     "source_preflight",
     "query_understanding",
+    "answer_reuse",
     "parallel_strands",
     "source_health_assessment",
     "entity_resolution",

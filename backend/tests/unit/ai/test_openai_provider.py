@@ -32,6 +32,7 @@ from builders.openai_responses import (
     refusal_response_body,
     response_body,
     truncated_response_body,
+    usage,
 )
 from tripfinder.ai.errors import (
     LLMCredentialError,
@@ -44,6 +45,7 @@ from tripfinder.ai.openai import OpenAIProvider
 from tripfinder.ai.openai.config import OpenAIConfig, ReasoningEffort
 from tripfinder.domain.models import FailureKind
 from tripfinder.domain.ports import LLMProvider
+from tripfinder.domain.usage import TokenLedger
 
 
 class Verdict(BaseModel):
@@ -292,3 +294,99 @@ class TestEveryFailureNamesItsKind:
         ]
 
         assert {error.kind for error in errors} == set(FailureKind) - {FailureKind.UNEXPECTED_ERROR}
+
+
+# Plan §2.15 — every call records what it used, so "a cache hit saves money"
+# is a reading off two runs rather than a claim about them.
+
+
+async def test_a_call_records_the_tokens_it_used() -> None:
+    ledger = TokenLedger()
+    provider = stubbed_provider(
+        json_handler(
+            200,
+            response_body(
+                {"verdict": "yes", "confidence": 0.9},
+                usage=usage(input_tokens=1840, output_tokens=260),
+            ),
+        ),
+        ledger=ledger,
+    )
+
+    await provider.complete_structured(prompt="anything", response_model=Verdict)
+
+    assert ledger.totals() == {
+        "llm_calls": 1,
+        "llm_prompt_tokens": 1840,
+        "llm_completion_tokens": 260,
+        "llm_total_tokens": 2100,
+        "llm_calls_without_usage": 0,
+    }
+
+
+async def test_calls_accumulate_across_a_run() -> None:
+    ledger = TokenLedger()
+    provider = stubbed_provider(
+        json_handler(
+            200,
+            response_body(
+                {"verdict": "yes", "confidence": 0.9},
+                usage=usage(input_tokens=100, output_tokens=20),
+            ),
+        ),
+        ledger=ledger,
+    )
+
+    for _ in range(3):
+        await provider.complete_structured(prompt="anything", response_model=Verdict)
+
+    assert ledger.calls == 3
+    assert ledger.totals()["llm_total_tokens"] == 360
+
+
+async def test_a_response_without_a_usage_block_is_unknown_not_free() -> None:
+    """Plan §0.1: an unmeasured call must not read as a call that cost nothing."""
+    ledger = TokenLedger()
+    provider = stubbed_provider(
+        json_handler(200, response_body({"verdict": "yes", "confidence": 0.9})),
+        ledger=ledger,
+    )
+
+    await provider.complete_structured(prompt="anything", response_model=Verdict)
+
+    assert ledger.totals()["llm_calls"] == 1
+    assert ledger.totals()["llm_calls_without_usage"] == 1
+    assert ledger.totals()["llm_total_tokens"] == 0
+
+
+async def test_an_answer_that_cannot_be_used_is_still_an_answer_that_was_billed() -> None:
+    """A refusal costs exactly what a useful reply costs, and is recorded as such.
+
+    Counting only the successful calls would understate precisely the runs
+    worth investigating — the ones that failed expensively.
+    """
+    ledger = TokenLedger()
+    provider = stubbed_provider(
+        json_handler(
+            200,
+            refusal_response_body() | {"usage": usage(input_tokens=900, output_tokens=15)},
+        ),
+        ledger=ledger,
+    )
+
+    with pytest.raises(LLMResponseError):
+        await provider.complete_structured(prompt="anything", response_model=Verdict)
+
+    assert ledger.totals()["llm_calls"] == 1
+    assert ledger.totals()["llm_total_tokens"] == 915
+
+
+async def test_a_provider_without_a_ledger_still_answers() -> None:
+    """Recording is optional — every existing caller builds one without a ledger."""
+    provider = stubbed_provider(
+        json_handler(200, response_body({"verdict": "yes", "confidence": 0.9}))
+    )
+
+    assert (
+        await provider.complete_structured(prompt="anything", response_model=Verdict)
+    ).verdict == "yes"

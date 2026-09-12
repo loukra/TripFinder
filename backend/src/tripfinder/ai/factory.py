@@ -15,6 +15,7 @@ from pydantic import SecretStr
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.ai.openai import OpenAIConfig, OpenAIProvider
 from tripfinder.domain.ports import LLMProvider
+from tripfinder.domain.usage import TokenLedger
 
 
 class LLMProviderName(StrEnum):
@@ -32,6 +33,7 @@ def build_llm_provider(
     *,
     openai_api_key: SecretStr | None = None,
     openai_config: OpenAIConfig | None = None,
+    ledger: TokenLedger | None = None,
 ) -> LLMProvider:
     """The provider this process should use.
 
@@ -39,7 +41,12 @@ def build_llm_provider(
     that failure to surface as a failed research with a named reason, not as
     a process that would not start — so the provider is built either way and
     the first call is what fails.
+
+    ``ledger`` is where the run's token spend accumulates (plan §2.15).
+    Every implementation takes one, including the fake — what a run costs
+    must not be a number that only exists in production, or the code that
+    reads it is never exercised.
     """
     if provider is LLMProviderName.FAKE:
-        return FakeLLMProvider()
-    return OpenAIProvider(openai_config, api_key=openai_api_key)
+        return FakeLLMProvider(ledger=ledger)
+    return OpenAIProvider(openai_config, api_key=openai_api_key, ledger=ledger)

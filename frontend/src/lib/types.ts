@@ -119,6 +119,16 @@ export interface ResearchDiagnostics {
   failure: ResearchFailure | null;
 }
 
+// A run that showed an earlier run's answer instead of doing the work
+// (plan §2.15). The fact and the date are one object on purpose: there is no
+// shape of response that says an answer was reused without saying when it was
+// produced, so a view cannot render an old ranking as a new one by forgetting
+// a second field.
+export interface ReusedAnswer {
+  research_id: string;
+  answered_at: string;
+}
+
 export interface ResearchCreateResponse {
   id: string;
   status: ResearchStatus;
@@ -138,6 +148,7 @@ export interface ResearchStatusResponse {
   query: string;
   normalized_query: string | null;
   created_at: string | null;
+  reused: ReusedAnswer | null;
   statistics: Record<string, number>;
   diagnostics: ResearchDiagnostics;
   clarification: ClarificationRequest | null;
@@ -154,6 +165,7 @@ export interface ResearchListItem {
   status: ResearchStatus;
   message: string;
   result_count: number | null;
+  reused: ReusedAnswer | null;
 }
 
 export interface ResearchListResponse {
@@ -193,6 +205,10 @@ export interface ResearchResultsResponse {
   // `minimum_independent_users` is what tells the two apart.
   weak_results: ResultItem[];
   minimum_independent_users: number;
+  // Set when this ranking was produced by an earlier run (plan §2.15). Shown
+  // in the same place `provisional` is, for the same reason: a ranking that
+  // is not what it appears to be has to say so where it is read.
+  reused: ReusedAnswer | null;
 }
 
 export interface EvidenceResponse {

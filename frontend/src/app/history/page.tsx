@@ -42,9 +42,16 @@ const OUTCOME_TONE: Partial<Record<ResearchStatus, string>> = {
 
 const WHEN = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" });
 
+const ANSWERED_ON = new Intl.DateTimeFormat("en-GB", { dateStyle: "long" });
+
 function when(iso: string): string {
   const parsed = new Date(iso);
   return Number.isNaN(parsed.getTime()) ? iso : WHEN.format(parsed);
+}
+
+function answeredOn(iso: string): string {
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? iso : ANSWERED_ON.format(parsed);
 }
 
 /**
@@ -131,6 +138,18 @@ export default function HistoryPage() {
                       </span>
                     )}
                   </span>
+                  {/* The row's date is when this run was *asked*. A reused
+                      answer was produced earlier, and a row that showed only
+                      the first date would present a March ranking as today's
+                      (plan §2.15 rule 1). */}
+                  {run.reused && (
+                    <span className="run-reused">
+                      Answered on <time dateTime={run.reused.answered_at}>
+                        {answeredOn(run.reused.answered_at)}
+                      </time>{" "}
+                      — reused from an earlier run.
+                    </span>
+                  )}
                   <span className="text-muted history-message">{run.message}</span>
                 </Link>
               </li>

@@ -20,6 +20,7 @@ import httpx2
 from openai import AsyncOpenAI
 
 from tripfinder.ai.openai import OpenAIConfig, OpenAIProvider
+from tripfinder.domain.usage import TokenLedger
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -33,7 +34,12 @@ def fast_config(**overrides: Any) -> OpenAIConfig:
     return OpenAIConfig(**defaults)
 
 
-def stubbed_provider(handler: Handler, *, config: OpenAIConfig | None = None) -> OpenAIProvider:
+def stubbed_provider(
+    handler: Handler,
+    *,
+    config: OpenAIConfig | None = None,
+    ledger: TokenLedger | None = None,
+) -> OpenAIProvider:
     """A provider whose HTTP calls are served by ``handler``, never by the network."""
     settings = config or OpenAIConfig()
     client = AsyncOpenAI(
@@ -42,7 +48,7 @@ def stubbed_provider(handler: Handler, *, config: OpenAIConfig | None = None) ->
         max_retries=settings.max_retries,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
     )
-    return OpenAIProvider(settings, client=client)
+    return OpenAIProvider(settings, client=client, ledger=ledger)
 
 
 def json_handler(

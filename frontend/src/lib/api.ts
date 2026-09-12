@@ -53,11 +53,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function createResearch(query: string): Promise<ResearchCreateResponse> {
+// `fresh` asks for the work to be done again whatever has been answered
+// before (plan §2.15 rule 2). It produces an ordinary run with a new id and
+// leaves the old one in history — never a replacement, never an overwrite.
+export function createResearch(
+  query: string,
+  options: { fresh?: boolean } = {}
+): Promise<ResearchCreateResponse> {
   return fetchJson<ResearchCreateResponse>("/api/research", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, fresh: options.fresh ?? false }),
   });
 }
 

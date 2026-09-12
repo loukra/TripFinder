@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { EvidencePanel } from "./EvidencePanel";
-import type { ResearchResultsResponse, ResultItem } from "@/lib/types";
+import type { ResearchResultsResponse, ResultItem, ReusedAnswer } from "@/lib/types";
 
 interface ResultsViewProps {
   researchId: string;
@@ -11,6 +12,13 @@ interface ResultsViewProps {
    *  ranking that is no longer being refreshed must not keep promising that
    *  its numbers are growing. */
   live?: boolean;
+  /** Ask for the work to be done again (plan §2.15 rule 2). Passed in rather
+   *  than called from here: this component draws a ranking, and starting a
+   *  run is the page's job. Absent, the banner still says the answer's date —
+   *  the label is not conditional on being able to act on it. */
+  onRunAgain?: () => void;
+  /** Whether that request is in flight. */
+  runningAgain?: boolean;
 }
 
 interface Hold {
@@ -28,7 +36,13 @@ function confidenceBand(confidence: number): { label: string; tagClass: string }
   return { label: "low confidence", tagClass: "tag tag-outline" };
 }
 
-export function ResultsView({ researchId, data, live = true }: ResultsViewProps) {
+export function ResultsView({
+  researchId,
+  data,
+  live = true,
+  onRunAgain,
+  runningAgain = false,
+}: ResultsViewProps) {
   // A provisional list reorders as counts grow (plan §2.13.1), which is
   // honest — except at the moment it moves a row out from under someone who
   // has opened its evidence. So an open evidence panel holds the view where
@@ -64,6 +78,9 @@ export function ResultsView({ researchId, data, live = true }: ResultsViewProps)
   // A finished run is the answer. It always lands, whatever is being read.
   const shown = data.provisional ? (hold.frozen ?? data) : data;
   const { results, weak_results: weakResults, message, provisional } = shown;
+  // Read off `data`, never off the frozen copy: whether this answer is an
+  // older run's is a fact about the run, not about the snapshot on screen.
+  const reused = data.reused;
   const percentagesSuppressed = shown.percentages_suppressed;
   const threshold = shown.minimum_independent_users;
 
@@ -90,6 +107,7 @@ export function ResultsView({ researchId, data, live = true }: ResultsViewProps)
   if (results.length === 0 && candidates.length === 0) {
     return (
       <section className="section" aria-label="Results">
+        <ReusedBanner reused={reused} onRunAgain={onRunAgain} runningAgain={runningAgain} />
         {provisional && (
           <p className="banner banner-provisional">
             <strong>Provisional result</strong>
@@ -118,6 +136,10 @@ export function ResultsView({ researchId, data, live = true }: ResultsViewProps)
 
   return (
     <section className="section rise" aria-label="Results">
+      {/* A reused answer says so above the ranking, in the place a
+          provisional one says it is provisional (plan §2.15 rule 1). */}
+      <ReusedBanner reused={reused} onRunAgain={onRunAgain} runningAgain={runningAgain} />
+
       {/* The provisional ranking is drawn exactly like the finished one —
           same rows, same ranks, same place on the page — and says what it is
           in a banner above rather than in a different layout. Plan §2.13.1
@@ -189,6 +211,47 @@ interface CandidateGroupProps {
   results: ResultItem[];
   maxSupporterCount: number;
   onHoldChange: (key: string, held: boolean) => void;
+}
+
+// The date a reused answer was produced, spelled out rather than given as
+// "6 months ago": a reader deciding whether to pay for a fresh run needs the
+// actual day, and a relative phrase is the easiest thing in the world to
+// round in the reader's favour.
+const ANSWERED_ON = new Intl.DateTimeFormat("en-GB", { dateStyle: "long" });
+
+function ReusedBanner({
+  reused,
+  onRunAgain,
+  runningAgain,
+}: {
+  reused: ReusedAnswer | null;
+  onRunAgain?: () => void;
+  runningAgain?: boolean;
+}) {
+  // Falsy, not `=== null`: a response from an API that predates this field
+  // has no `reused` at all, and a banner that renders for `undefined` would
+  // reach for a date that is not there.
+  if (!reused) return null;
+  const answeredAt = new Date(reused.answered_at);
+  return (
+    <p className="banner banner-reused" role="note">
+      <span>
+        <strong>Answered on {ANSWERED_ON.format(answeredAt)}.</strong> This question had already
+        been researched, so these are that run&rsquo;s counts rather than a new reading.{" "}
+        <Link href={`/research/${reused.research_id}`}>See the original run</Link>.
+      </span>
+      {onRunAgain && (
+        <button
+          type="button"
+          className="banner-reused-action"
+          onClick={onRunAgain}
+          disabled={runningAgain}
+        >
+          {runningAgain ? "Starting\u2026" : "Research it again"}
+        </button>
+      )}
+    </p>
+  );
 }
 
 function CandidateGroup({

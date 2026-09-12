@@ -7,11 +7,12 @@ live in ``sources/`` and ``ai/`` and import *this* module — never the reverse.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from tripfinder.domain.models import Comment, SourceDocument
+from tripfinder.domain.models import Comment, Research, SourceDocument
 
 
 class WebSearchQuery(BaseModel):
@@ -68,6 +69,30 @@ class SourceAdapter(Protocol):
     async def fetch_documents(self, document_ids: Sequence[str]) -> Sequence[SourceDocument]: ...
 
     async def fetch_comments(self, document: SourceDocument) -> Sequence[Comment]: ...
+
+
+@runtime_checkable
+class AnswerArchive(Protocol):
+    """Answers this product has already produced, looked up by plan (plan §2.15).
+
+    A port rather than a repository call, for the reason every other port
+    here exists: the pipeline has no database and must not grow one. The
+    worker hands it a reader backed by the ``research`` table; tests hand it
+    a list. Neither is visible to the step that asks.
+
+    The *policy* — what may be reused, and how old is too old — is not in
+    here. This answers one narrow question: which stored run, if any, has
+    this fingerprint and is recent enough. Whether that run finished
+    properly, and whether it was itself reusing, is decided by
+    ``AnswerReuseStep`` against the run it gets back, where the reasoning is
+    visible and testable without a database.
+    """
+
+    async def find_by_fingerprint(
+        self, *, fingerprint: str, not_before: datetime
+    ) -> Research | None:
+        """The most recent run with this fingerprint created at or after ``not_before``."""
+        ...
 
 
 @runtime_checkable

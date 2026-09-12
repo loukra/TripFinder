@@ -19,6 +19,7 @@ function listItem(overrides: Partial<ResearchListItem> = {}): ResearchListItem {
     status: "completed",
     message: "Finished. Every discussion we set out to read was read.",
     result_count: 5,
+    reused: null,
     ...overrides,
   };
 }
@@ -135,5 +136,32 @@ describe("The history page", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /show older/i })).not.toBeInTheDocument()
     );
+  });
+
+  it("says when a reused answer was produced, not only when it was asked", async () => {
+    // The row's own date is today. Without the second date, a March ranking
+    // is listed as though it were read this morning (plan §2.15 rule 1).
+    vi.mocked(api.listResearch).mockResolvedValue(
+      page([
+        listItem({
+          created_at: "2026-09-12T08:00:00Z",
+          reused: { research_id: "r0", answered_at: "2026-03-04T09:30:00Z" },
+        }),
+      ])
+    );
+
+    render(<HistoryPage />);
+
+    const row = await screen.findByRole("listitem");
+    expect(within(row).getByText(/Answered on/)).toHaveTextContent("4 March 2026");
+  });
+
+  it("says nothing extra about a run that did its own work", async () => {
+    vi.mocked(api.listResearch).mockResolvedValue(page([listItem()]));
+
+    render(<HistoryPage />);
+
+    const row = await screen.findByRole("listitem");
+    expect(within(row).queryByText(/Answered on/)).toBeNull();
   });
 });

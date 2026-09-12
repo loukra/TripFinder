@@ -19,7 +19,16 @@ persisting half-written state.
 
 The run's start is stamped here, once, because this is the only place that
 knows when the pass actually began — plan §2.12.2's duration budget is
-measured from it.
+measured from it. What the run spent at the model is written back here for
+the mirror-image reason: the ledger is only complete once no more steps will
+run, and it has to be recorded whether the run finished, halted or failed
+(plan §2.15).
+
+Since 14.10 a run can also stop because it has nothing left to do:
+``AnswerReuseStep`` may find that this question was already answered, and
+sets ``context.answered`` rather than a status, because the answer it copied
+is genuinely ``completed`` and the instruction to stop is not a state the
+research is in (plan §2.15).
 
 ``on_progress`` is awaited, so the worker can use it to persist
 ``research.status`` to the database after every step — without it, a real
@@ -64,23 +73,36 @@ class PipelineRunner:
         # must not be charged for the time a human spent answering (§2.12.2).
         mark_started(context)
 
-        for sequence, step in enumerate(self._steps, start=1):
-            try:
-                context = await step.run(context)
-            except LLMProviderError as exc:
-                _fail(context, step=step.name, error=exc)
-            event = ProgressEvent(
-                sequence=sequence, step_name=step.name, status=context.research.status
-            )
-            context.progress.append(event)
-            if self._on_progress is not None:
-                await self._on_progress(event)
-            if is_halting(context.research.status):
-                break
-            if should_cancel is not None and await should_cancel():
-                logger.info("pipeline: cancellation requested after %s", step.name)
-                context.research.status = ResearchStatus.CANCELLED
-                break
+        try:
+            for sequence, step in enumerate(self._steps, start=1):
+                try:
+                    context = await step.run(context)
+                except LLMProviderError as exc:
+                    _fail(context, step=step.name, error=exc)
+                event = ProgressEvent(
+                    sequence=sequence, step_name=step.name, status=context.research.status
+                )
+                context.progress.append(event)
+                if self._on_progress is not None:
+                    await self._on_progress(event)
+                if is_halting(context.research.status):
+                    break
+                if context.answered:
+                    # Plan §2.15: this run is showing an earlier run's
+                    # answer. Every step below it would spend money
+                    # recomputing something already on the row.
+                    logger.info("pipeline: answered from the archive after %s", step.name)
+                    break
+                if should_cancel is not None and await should_cancel():
+                    logger.info("pipeline: cancellation requested after %s", step.name)
+                    context.research.status = ResearchStatus.CANCELLED
+                    break
+        finally:
+            # What the run spent is written whatever happened to it (plan
+            # §2.15). A run that failed after forty analysis calls has spent
+            # forty analysis calls, and a record that omits them would make
+            # the cheapest runs look like the ones that went wrong.
+            context.research.statistics.update(context.usage.totals())
         return context
 
 

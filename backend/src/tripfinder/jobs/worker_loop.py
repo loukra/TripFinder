@@ -24,6 +24,10 @@ Two things this loop owns beyond queue mechanics:
   ``results``/``weak_results`` are written, never a status, a statistic or a
   diagnostic — the run's record is always the output of the full step 8-12
   pass, which lands here moments later by the ordinary route.
+* **The archive** (plan §2.15). The worker is the only process that can
+  hand the pipeline the runs already stored, so it builds the
+  ``AnswerArchive`` a reuse lookup needs. The pipeline still has no
+  database: it has a port, and this is where the port is filled.
 * **The lease** (plan §1's job queue). A claimed job is held by a heartbeat
   for as long as the pipeline runs, and handed back to the queue if the
   heartbeat stops — which is what turns a killed worker from "this run is
@@ -52,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tripfinder.domain.models import FailureKind, ResearchStatus
 from tripfinder.jobs.repository import JobRepository
+from tripfinder.persistence.answer_archive import SqlAnswerArchive
 from tripfinder.persistence.repositories import ResearchRepository
 from tripfinder.pipeline.base import PartialResults, ProgressEvent
 from tripfinder.pipeline.real_pipeline import (
@@ -138,7 +143,10 @@ async def run_once(
                 await ResearchRepository(session).save(research)
 
         context = build_pipeline_context_for(
-            research, settings=settings, on_partial_results=_persist_partial
+            research,
+            settings=settings,
+            on_partial_results=_persist_partial,
+            archive=SqlAnswerArchive(session_factory),
         )
         pipeline_context = context
 

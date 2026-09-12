@@ -16,7 +16,13 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from tripfinder.domain.models import Research, ResearchStatus, Result
-from tripfinder.domain.ports import LLMProvider, SourceAdapter, WebSearchProvider
+from tripfinder.domain.ports import (
+    AnswerArchive,
+    LLMProvider,
+    SourceAdapter,
+    WebSearchProvider,
+)
+from tripfinder.domain.usage import TokenLedger
 
 
 class ProgressEvent(BaseModel):
@@ -60,6 +66,28 @@ class PipelineContext:
     source: SourceAdapter
     search: WebSearchProvider
     llm: LLMProvider
+    archive: AnswerArchive | None = None
+    """Earlier answers this run may reuse (plan §2.15). Unset, it never reuses.
+
+    Optional because most callers have no database — the pipeline has never
+    had one and does not get one here. A run without an archive behaves
+    exactly as every run did before 14.10: it does the work itself."""
+    usage: TokenLedger = field(default_factory=TokenLedger)
+    """What this run spent at the model (plan §2.15).
+
+    Lives on the context rather than inside the provider because the run is
+    what the number describes, and because the runner writes it into
+    ``statistics`` whatever the run's outcome was — a failed run that spent
+    four calls has spent them."""
+    answered: bool = False
+    """Set by ``AnswerReuseStep`` when this run's answer is already final.
+
+    Not a status, deliberately. ``completed`` is set mid-pipeline by the
+    source health step and several steps legitimately run after it, so it
+    cannot mean "stop"; and a reused answer must be ``completed`` and
+    nothing else, because it is a genuinely finished answer — an older one,
+    which ``Research.reused`` is what says. So the instruction to stop is
+    carried here, where it says only what it means."""
     data: dict[str, Any] = field(default_factory=dict)
     progress: list[ProgressEvent] = field(default_factory=list)
     on_partial_results: PartialResultsListener | None = None

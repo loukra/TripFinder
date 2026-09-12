@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   cancelResearch,
   clarifyResearch,
+  createResearch,
   getPollIntervalMs,
   getResearch,
   getResults,
@@ -51,6 +53,7 @@ const MAX_POLL_FAILURES = 3;
  * anything.
  */
 export function RunView({ researchId }: { researchId: string }) {
+  const router = useRouter();
   const [run, setRun] = useState<RunState | null>(null);
   const [results, setResults] = useState<ResearchResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +66,8 @@ export function RunView({ researchId }: { researchId: string }) {
   const [resultsChecked, setResultsChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  // Whether a fresh run has been asked for and not yet navigated to.
+  const [researchingAgain, setResearchingAgain] = useState(false);
   // Consecutive failed status fetches. A single blip — the API restarting,
   // a dropped connection — is not a reason to abandon a run that is still
   // working; several in a row are.
@@ -169,6 +174,22 @@ export function RunView({ researchId }: { researchId: string }) {
       setError(err instanceof ApiError ? err.message : "could not submit that answer");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Plan §2.15 rule 2: a fresh run is always one click away, and it never
+  // consults the cache. It is a *new* run at a new URL — this one stays in
+  // history exactly as it is, which is what makes the offer safe to take.
+  async function handleResearchAgain() {
+    if (!run) return;
+    setResearchingAgain(true);
+    setError(null);
+    try {
+      const created = await createResearch(run.query, { fresh: true });
+      router.push(`/research/${created.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "could not start this research");
+      setResearchingAgain(false);
     }
   }
 
@@ -336,7 +357,13 @@ export function RunView({ researchId }: { researchId: string }) {
           )}
 
           {showResults && results && (
-            <ResultsView researchId={run.id} data={results} live={!lostTheRun} />
+            <ResultsView
+              researchId={run.id}
+              data={results}
+              live={!lostTheRun}
+              onRunAgain={handleResearchAgain}
+              runningAgain={researchingAgain}
+            />
           )}
 
           {isRunning && !showResults && !awaitingClarification && (
