@@ -6,6 +6,7 @@ leak through (``PROJECT.md`` §25).
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -114,6 +115,40 @@ class ResearchResultsResponse(BaseModel):
     and without it the view cannot say *why* an entity is in
     ``weak_results`` without guessing.
     """
+
+
+class ResearchListItem(BaseModel):
+    """One run as the history page lists it (plan §2.15, Phase 14.9).
+
+    A line of history, not a miniature results page. ``status`` is what
+    separates a run that finished from one that was cut short, failed or
+    cancelled — §0.1 rule 4 again, one status ahead of the click rather
+    than after it — and ``message`` is the same §7.1 wording the run's own
+    page uses, so the list cannot describe an outcome in words the page
+    contradicts.
+
+    ``result_count`` is ``None`` — not ``0`` — for a run with no results
+    page. Zero would say *this run looked and found nothing*, which is the
+    sentence plan §0.1 exists to prevent a broken run from borrowing.
+    """
+
+    id: UUID
+    query: str
+    """What the user typed. The normalised form is ``normalized_query``."""
+    normalized_query: str | None
+    created_at: datetime
+    status: ResearchStatus
+    message: str
+    result_count: int | None
+
+
+class ResearchListResponse(BaseModel):
+    """A page of past runs, newest first."""
+
+    total: int
+    limit: int
+    offset: int
+    runs: list[ResearchListItem]
 
 
 class SourceUnavailableError(BaseModel):

@@ -15,6 +15,13 @@ instance of it: an unfinished ranking has to be unmistakable for a finished
 one, and the way it is made unmistakable is a hole where the percentage
 would be, which no client can fill in by ignoring a flag.
 
+Since 14.9 the collection itself is readable (plan §2.15): ``GET
+/api/research`` lists past runs newest first. The same four obligations
+apply one row at a time — a run with no results page is listed with a
+``result_count`` of ``null`` rather than ``0``, because a run that broke
+before it could rank anything must not be listed in the words of a run that
+looked and found nothing.
+
 Cancellation (plan §10 Phase 13) has two paths depending on whether a
 worker has already claimed the job: a job still queued is cancelled
 outright; a job in flight is flagged, and the worker's own error contract
@@ -38,6 +45,7 @@ from tripfinder.api.messages import (
     percentages_suppressed,
     research_message,
     results_message,
+    status_message,
 )
 from tripfinder.api.schemas import (
     ClarifyRequest,
@@ -46,6 +54,8 @@ from tripfinder.api.schemas import (
     ResearchCreateRequest,
     ResearchCreateResponse,
     ResearchFailedError,
+    ResearchListItem,
+    ResearchListResponse,
     ResearchNotReadyError,
     ResearchResultsResponse,
     ResearchStatusResponse,
@@ -54,7 +64,7 @@ from tripfinder.api.schemas import (
 )
 from tripfinder.domain.models import ClarificationRequest, Research, ResearchStatus, Result
 from tripfinder.jobs.repository import JobRepository
-from tripfinder.persistence.repositories import ResearchRepository
+from tripfinder.persistence.repositories import ResearchRepository, ResearchSummary
 from tripfinder.pipeline.steps.query_understanding import build_plan_from_pending
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -98,6 +108,27 @@ async def create_research(
     await ResearchRepository(session).create(research)
     await JobRepository(session).enqueue(research.id)
     return ResearchCreateResponse(id=research.id, status=research.status)
+
+
+@router.get("", response_model=ResearchListResponse)
+async def list_research(
+    session: SessionDep,
+    limit: Annotated[int, Query(gt=0, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ResearchListResponse:
+    """Past runs, newest first (plan §2.15, Phase 14.9).
+
+    Reads nothing but the ``research`` table: listing history never starts a
+    run, never touches a source and never calls a model.
+    """
+    repository = ResearchRepository(session)
+    summaries = await repository.list_recent(limit=limit, offset=offset)
+    return ResearchListResponse(
+        total=await repository.count(),
+        limit=limit,
+        offset=offset,
+        runs=[_list_item(summary) for summary in summaries],
+    )
 
 
 @router.get("/{research_id}", response_model=ResearchStatusResponse)
@@ -305,7 +336,7 @@ def _status_response(research: Research) -> ResearchStatusResponse:
     )
 
 
-def _holds_a_snapshot(research: Research) -> bool:
+def _holds_a_snapshot(status: ResearchStatus, *, has_results: bool) -> bool:
     """Whether a cancelled run has a provisional ranking worth serving (plan §2.13.3).
 
     §7.1 gave ``cancelled`` no results page, on the reasoning that an
@@ -314,15 +345,43 @@ def _holds_a_snapshot(research: Research) -> bool:
     read, and throwing that away to show an empty page is the same waste
     §2.12.2 refuses when it lets in-flight batches finish. A cancelled run
     with no snapshot behaves exactly as it did before.
+
+    Takes a status and a yes/no rather than a ``Research`` so the history
+    listing, which never loads one, decides by the same rule the results
+    endpoint does.
     """
-    return research.status is ResearchStatus.CANCELLED and bool(
-        research.results or research.weak_results
+    return status is ResearchStatus.CANCELLED and has_results
+
+
+def _has_results_page(status: ResearchStatus, *, has_results: bool) -> bool:
+    """Whether this run will serve a results object at all (plan §7.1)."""
+    return status in _RESULTS_READY_STATUSES or _holds_a_snapshot(status, has_results=has_results)
+
+
+def _list_item(summary: ResearchSummary) -> ResearchListItem:
+    ranked = summary.result_count + summary.weak_result_count > 0
+    return ResearchListItem(
+        id=summary.id,
+        query=summary.original_query,
+        normalized_query=summary.normalized_query,
+        created_at=summary.created_at,
+        status=summary.status,
+        # The listing wants one stable sentence per outcome, so it uses the
+        # §7.1 table directly rather than `research_message`, whose
+        # in-progress wording is picked at random on every request.
+        message=status_message(summary.status),
+        result_count=(
+            summary.result_count
+            if _has_results_page(summary.status, has_results=ranked)
+            else None
+        ),
     )
 
 
 def _require_results_ready(research: Research) -> None:
     """Plan §7.1's "No" column, for every status not already handled by a richer error."""
-    if research.status not in _RESULTS_READY_STATUSES and not _holds_a_snapshot(research):
+    has_results = bool(research.results or research.weak_results)
+    if not _has_results_page(research.status, has_results=has_results):
         raise HTTPException(
             status_code=409,
             detail=ResearchNotReadyError(
