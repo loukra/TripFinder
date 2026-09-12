@@ -233,6 +233,87 @@ class TestHallucinationSafeguard:
         assert result.explanation is not None
         assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == []
 
+    async def test_a_quote_copied_with_its_wrapping_marks_is_not_a_fabrication(self) -> None:
+        """The second time this check fired on its own formatting.
+
+        The prompt printed every supplied quote inside quotation marks and
+        told the model to copy it character for character; the model copied
+        the marks too. A measured run reported five fabrications, lost all
+        five explanations, and every cited quote was one we had handed it."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=(f'"{QUOTE}"',))])]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        [result] = context.research.results
+        assert result.explanation is not None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == []
+
+    async def test_curly_wrapping_marks_are_stripped_too(self) -> None:
+        """Models render the pair either way, and which one arrived says
+        nothing about whether the words are ours."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[_summary(ALASKA, cited_quotes=(f"\u201c{QUOTE}\u201d",))]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is not None
+
+    async def test_an_inner_quotation_mark_is_still_part_of_the_quote(self) -> None:
+        """Only a *matched enclosing* pair is a delimiter. A quotation mark
+        inside the text is one of the words, and dropping it would let a
+        citation differ from what was supplied."""
+        stored = 'He said "go north" and he was right'
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA, quote=stored)],
+            llm=RecordingLLM(
+                [
+                    EntitySummaryBatch(
+                        items=[
+                            _summary(
+                                ALASKA, cited_quotes=("He said go north and he was right",)
+                            )
+                        ]
+                    )
+                ]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is None
+        assert _suppressions(context, SuppressionReason.SUMMARIZATION_FABRICATED_QUOTE) == [1]
+
+    async def test_a_trimmed_span_of_a_supplied_quote_is_still_refused(self) -> None:
+        """Unwrapping a delimiter is not the same as accepting a fragment.
+        The rule stays "the quotes we handed it", whole."""
+        context = _context(
+            results=[_result(ALASKA)],
+            resolutions=[_resolution(ALASKA)],
+            llm=RecordingLLM(
+                [EntitySummaryBatch(items=[_summary(ALASKA, cited_quotes=(QUOTE[:12],))])]
+            ),
+        )
+
+        await SummarizationStep().run(context)
+
+        assert context.research.results[0].explanation is None
+
     async def test_an_explanation_citing_no_quotes_is_ungrounded(self) -> None:
         context = _context(
             results=[_result(ALASKA)],
@@ -329,7 +410,7 @@ class TestEvidenceIsCappedAndDeduplicated:
 
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
-        assert llm.prompts[0].count('  - "') == 2
+        assert llm.prompts[0].count("    [") == 2
 
     async def test_a_repeated_quote_is_sent_once(self) -> None:
         resolutions = [
@@ -346,7 +427,7 @@ class TestEvidenceIsCappedAndDeduplicated:
 
         llm = context.llm
         assert isinstance(llm, RecordingLLM)
-        assert llm.prompts[0].count('  - "') == 1
+        assert llm.prompts[0].count("    [") == 1
 
 
 class TestBatching:

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResultsView } from "./ResultsView";
 import * as api from "@/lib/api";
@@ -50,6 +50,35 @@ function makeData(overrides: Partial<ResearchResultsResponse> = {}): ResearchRes
 }
 
 describe("ResultsView", () => {
+  // The written reason a place is in the top five. It comes from
+  // Summarization (plan §4.6 step 13) and is the only prose on the page that
+  // says *why* — and it is null far more often than it should be, because
+  // the grounding check has twice rejected the model's own citations over
+  // formatting. Nothing asserted it reached the screen until now.
+  it("prints the explanation under the result it belongs to", () => {
+    render(<ResultsView researchId="r1" data={makeData()} />);
+
+    const alaska = screen.getByText("Alaska").closest("li")!;
+    expect(
+      within(alaska).getByText("Frequently cited for untouched wilderness.")
+    ).toBeInTheDocument();
+  });
+
+  it("leaves no empty paragraph for a result that has no explanation", () => {
+    const { container } = render(<ResultsView researchId="r1" data={makeData()} />);
+
+    // Two results, one of them with `explanation: null`.
+    expect(container.querySelectorAll(".result-explanation")).toHaveLength(1);
+  });
+
+  it("shows the explanation on a provisional ranking too", () => {
+    render(<ResultsView researchId="r1" data={makeData({ provisional: true })} />);
+
+    expect(
+      screen.getByText("Frequently cited for untouched wilderness.")
+    ).toBeInTheDocument();
+  });
+
   it("shows the exact percentage label and denominator wording", () => {
     render(<ResultsView researchId="r1" data={makeData()} />);
 

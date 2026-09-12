@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Sequence
+from difflib import SequenceMatcher
 from typing import NamedTuple
 
 from tripfinder.analysis.entity_resolution import ResolvedMention
@@ -63,9 +64,48 @@ class _BatchResult(NamedTuple):
     """Items that named no entity in the batch, or named one twice."""
 
 
+_ENCLOSING_PAIRS = (('"', '"'), ("'", "'"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+"""Delimiters a citation may arrive wrapped in. Straight and curly, because
+the model renders them either way."""
+
+
+def _unwrapped(quote: str) -> str:
+    """One matched pair of enclosing quotation marks removed, if present.
+
+    The prompt used to print every supplied quote inside quotation marks, and
+    a model told to copy "character for character" copied those too. Stripping
+    a delimiter this pipeline added is not loosening the anti-fabrication rule
+    — it is declining to treat our own punctuation as the model's invention.
+    Applied to both sides, so a comment that really is a quotation start to
+    finish still compares against itself.
+    """
+    for opening, closing in _ENCLOSING_PAIRS:
+        if len(quote) >= 2 and quote.startswith(opening) and quote.endswith(closing):
+            return quote[1:-1].strip()
+    return quote
+
+
 def _comparable(quote: str) -> str:
-    """One quote, as it is compared: same words, whitespace collapsed."""
-    return " ".join(quote.split())
+    """One quote, as it is compared: same words, whitespace collapsed, and
+    stripped of the quotation marks this module may have wrapped it in."""
+    return _unwrapped(" ".join(quote.split()))
+
+
+def _closest(quote: str, candidates: Sequence[str]) -> str:
+    """The supplied quote a rejected citation came nearest to.
+
+    Logged beside the rejection so the next surprise takes one line to
+    diagnose rather than a run. "Not drawn from its stored evidence" is true
+    of a fabrication, of a trimmed span and of a re-punctuated copy, and only
+    the first is worth the name.
+    """
+    if not candidates:
+        return "(nothing was supplied for this entity)"
+    best = max(
+        candidates, key=lambda candidate: SequenceMatcher(None, quote, candidate).ratio()
+    )
+    ratio = SequenceMatcher(None, quote, best).ratio()
+    return f"{best!r} (similarity {ratio:.2f})"
 
 
 def _batched(
@@ -181,11 +221,18 @@ class SummarizationStep:
                 discarded += 1
                 continue
             if not self._is_grounded(item, evidence):
+                unknown = [
+                    quote
+                    for quote in item.cited_quotes
+                    if _comparable(quote) not in {_comparable(q) for q in evidence.quotes}
+                ]
                 logger.warning(
                     "summarization: discarding the explanation for %s — it cites a "
-                    "quote not drawn from its stored evidence: %s",
+                    "quote not drawn from its stored evidence: %s; nearest supplied "
+                    "quote: %s",
                     evidence.entity_name,
-                    [quote[:90] for quote in item.cited_quotes] or "(no quote cited at all)",
+                    [quote[:120] for quote in unknown] or "(no quote cited at all)",
+                    _closest(unknown[0], evidence.quotes) if unknown else "(n/a)",
                 )
                 fabricated_ids.add(item.entity_id)
                 continue

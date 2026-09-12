@@ -90,3 +90,20 @@ class TestPrompt:
 
         assert all(f"entity_id=state:s{index}" in prompt for index in range(3))
         assert "Entities (3)" in prompt
+
+    def test_a_supplied_quote_is_not_wrapped_in_quotation_marks(self) -> None:
+        """It used to be, and a model told to copy character for character
+        copied the wrapper too — five explanations lost in a measured run to
+        a delimiter this module had added itself."""
+        prompt = build_summarization_prompt([self._entity()])
+
+        assert '"some of the most spectacular' not in prompt
+        assert "[1] some of the most spectacular" in prompt
+
+    def test_the_marker_is_explained_as_a_label(self) -> None:
+        """A number the model mistakes for text is no better than the
+        quotation marks it replaces."""
+        prompt = build_summarization_prompt([self._entity()])
+
+        assert "label, not part of the quote" in prompt
+        assert "do not put quotation marks around what you copy" in prompt
