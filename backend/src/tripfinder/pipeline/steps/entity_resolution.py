@@ -401,6 +401,13 @@ class EntityResolutionStep:
         statistics["entity_resolution_items_discarded"] = (
             statistics.get("entity_resolution_items_discarded", 0) + discarded
         )
+        # Resolving names early moves calls, and must not multiply them. That
+        # is a claim about a number, so the number is recorded rather than
+        # asserted — a run that starts asking sooner and ends up asking twice
+        # as often is visible here and nowhere else.
+        statistics["entity_resolution_calls"] = statistics.get(
+            "entity_resolution_calls", 0
+        ) + len(range(0, len(questions), self._batch_size))
         return answers
 
     def _apply(

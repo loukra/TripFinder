@@ -290,3 +290,16 @@ class TestItCostsTheCallsItAlwaysDid:
         assert sorted(form for batch in llm.batches for form in batch) == sorted(
             name for _, _, name in CORPUS
         )
+
+    async def test_the_run_counts_the_calls_it_made(self) -> None:
+        """"The calls move earlier, they do not multiply" is a claim about a
+        number, so the number is on the run (plan §0.1's habit, applied to
+        cost)."""
+        context = _context()
+        await _prime(context, batch_size=3)
+
+        context.data["counted_analyses"] = _analyses()
+        context.data["evidence_analyses"] = []
+        await EntityResolutionStep(batch_size=3).run(context)
+
+        assert context.research.statistics["entity_resolution_calls"] == 2
