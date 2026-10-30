@@ -292,14 +292,21 @@ export function RunView({ researchId }: { researchId: string }) {
         ? "Results"
         : "Research outcome";
 
+  // A finished ranking's outcome sentence is about the whole run, so it sits
+  // under the question rather than inside one of the three columns — which
+  // lets all three start on the same line. It waits for the ranking itself,
+  // for the reason `mightHaveResults` gives.
+  const outcome = results !== null && !results.provisional ? results.message : null;
+
   return (
     <main className="page page-run">
       <div className="run-head">
         <div className="section-head-main">
           <p className="text-muted section-kicker">{kicker}</p>
           <h1 className="section-query">{run.query}</h1>
+          {outcome && <p className="run-outcome">{outcome}</p>}
         </div>
-        <Link className="btn btn-secondary" href="/">
+        <Link className="btn btn-secondary run-head-action" href="/">
           New research
         </Link>
       </div>
@@ -323,6 +330,10 @@ export function RunView({ researchId }: { researchId: string }) {
         </aside>
 
         <div className="run-main">
+          {(showResults || isRunning) && !awaitingClarification && (
+            <h2 className="run-side-heading">Ranking</h2>
+          )}
+
           {awaitingClarification && run.clarification && (
             <ClarificationView
               clarification={run.clarification}
@@ -363,6 +374,7 @@ export function RunView({ researchId }: { researchId: string }) {
               live={!lostTheRun}
               onRunAgain={handleResearchAgain}
               runningAgain={researchingAgain}
+              messageShownAbove={outcome !== null}
             />
           )}
 

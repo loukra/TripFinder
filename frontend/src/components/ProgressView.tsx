@@ -56,18 +56,26 @@ export function ProgressView({ status, message, onCancel, cancelling = false }: 
 
   return (
     <section className="run-progress" aria-live="polite" aria-label="Research progress">
-      {/* A finished run's message heads the ranking itself; repeating it
-          here would print the same paragraph twice side by side. */}
-      <p className="progress-status">
-        <span className="status-badge">{STATUS_LABELS[status]}</span>
-        {!finished && ` ${message}`}
-      </p>
+      {/* The badge sits on the same line as the other columns' headings, so
+          the stage list, the first result and the first counter start level. */}
+      <h2 className="run-side-heading status-badge">{STATUS_LABELS[status]}</h2>
 
-      <div className="progress-track" role="presentation">
-        <div className="progress-fill" style={{ width: `${Math.round(completedFraction * 100)}%` }} />
-      </div>
+      {/* A finished run's message sits under the question; repeating it
+          here would print the same paragraph twice. A full bar beside a
+          finished run says nothing the ticks below do not. */}
+      {!finished && (
+        <>
+          <p className="progress-status">{message}</p>
+          <div className="progress-track" role="presentation">
+            <div
+              className="progress-fill"
+              style={{ width: `${Math.round(completedFraction * 100)}%` }}
+            />
+          </div>
+        </>
+      )}
 
-      <ol className="stage-list">
+      <ol className={`stage-list${finished ? " is-finished" : ""}`}>
         {PIPELINE_STAGES.map((stage, index) => {
           const done = finished || (activeIndex >= 0 && index < activeIndex);
           const active = !finished && index === activeIndex;

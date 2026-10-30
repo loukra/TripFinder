@@ -157,6 +157,24 @@ describe("A run at its own URL", () => {
     expect(screen.getByRole("link", { name: "New research" })).toHaveAttribute("href", "/");
   });
 
+  // The outcome sentence moved under the question so the three columns can
+  // start level; it must not also stay above the ranking.
+  it("states a finished run's outcome once, under the question", async () => {
+    vi.mocked(api.getResearch).mockResolvedValue(
+      statusResponse({ status: "completed_partial", message: "Stopped early on purpose." })
+    );
+    vi.mocked(api.getResults).mockResolvedValue({
+      ...resultsResponse,
+      status: "completed_partial",
+      message: "Stopped early on purpose.",
+    });
+
+    render(<RunView researchId="r1" />);
+
+    expect(await screen.findByText("Alaska")).toBeInTheDocument();
+    expect(screen.getAllByText("Stopped early on purpose.")).toHaveLength(1);
+  });
+
   // Summarization runs last, so every provisional snapshot carries
   // `explanation: null` and only the final payload has the prose. If the
   // page ever kept a snapshot after the run ended, the ranking would be

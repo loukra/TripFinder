@@ -72,6 +72,17 @@ describe("ResultsView", () => {
     expect(container.querySelectorAll(".result-explanation")).toHaveLength(1);
   });
 
+  // A finished row with no summary had one withheld, usually by the quote
+  // check. A blank there reads as a bug; the row says what happened instead.
+  it("says why a finished result has no summary", () => {
+    render(<ResultsView researchId="r1" data={makeData()} />);
+
+    const oregon = screen.getByText("Oregon").closest("li")!;
+    expect(within(oregon).getByText(/No summary for this one/)).toBeInTheDocument();
+    const alaska = screen.getByText("Alaska").closest("li")!;
+    expect(within(alaska).queryByText(/No summary for this one/)).not.toBeInTheDocument();
+  });
+
   it("shows the explanation on a provisional ranking too", () => {
     render(<ResultsView researchId="r1" data={makeData({ provisional: true })} />);
 

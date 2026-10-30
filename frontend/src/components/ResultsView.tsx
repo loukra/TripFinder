@@ -19,6 +19,9 @@ interface ResultsViewProps {
   onRunAgain?: () => void;
   /** Whether that request is in flight. */
   runningAgain?: boolean;
+  /** Whether the page already states this ranking's outcome sentence above
+   *  it, so the list does not print it a second time. */
+  messageShownAbove?: boolean;
 }
 
 interface Hold {
@@ -42,6 +45,7 @@ export function ResultsView({
   live = true,
   onRunAgain,
   runningAgain = false,
+  messageShownAbove = false,
 }: ResultsViewProps) {
   // A provisional list reorders as counts grow (plan §2.13.1), which is
   // honest — except at the moment it moves a row out from under someone who
@@ -155,7 +159,7 @@ export function ResultsView({
         </p>
       )}
 
-      <p className="results-note">{message}</p>
+      {!messageShownAbove && <p className="results-note">{message}</p>}
 
       {percentagesSuppressed && !provisional && (
         <p className="banner banner-degraded">
@@ -337,7 +341,20 @@ function ResultRow({
             <div className="result-bar-fill" style={{ width: `${barWidthPercent}%` }} />
           </div>
 
-          {result.explanation && <p className="result-explanation">{result.explanation}</p>}
+          {result.explanation ? (
+            <p className="result-explanation">{result.explanation}</p>
+          ) : (
+            // A provisional row has no summary yet because summarising runs
+            // last. A finished row without one had it withheld — most often
+            // because it quoted something the comments do not contain — and
+            // a blank where the prose should be reads as a bug, not a check.
+            !provisional && (
+              <p className="text-muted result-explanation-withheld">
+                No summary for this one. Summaries are checked against the comments they quote,
+                and one that does not hold up is left out rather than shown.
+              </p>
+            )
+          )}
 
           <p className="result-share">
             {result.share !== null
