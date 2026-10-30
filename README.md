@@ -10,11 +10,7 @@ recommends, de-duplicates them so one enthusiast is one vote, and ranks the resu
 What comes back is not a model's opinion about travel. It is a count, with the comments it was
 counted from attached:
 
-> **#1 Canyonlands National Park — 47 people**
-> *10 % of people who answered mentioned this. Based on 448 people across 14 discussions.*
-> Travelers recommend Canyonlands because they describe it as really nice, a favorite, and much
-> less visited and less crowded than Arches.
-> [View evidence →]
+![A finished run: the ranking in the middle, the pipeline stages on the left, what was read on the right](docs/screenshots/results.png)
 
 ---
 
@@ -69,6 +65,10 @@ Only a run that read its corpus properly may answer for a later question. A run 
 time budget qualifies — it read what it read properly, and it stays labelled as partial when it is
 reused, rather than being quietly promoted to "finished". A run whose source was unhealthy, or that
 failed or was cancelled, never answers for anything.
+
+Every count opens onto the comments it was counted from, grouped by thread:
+
+![The evidence behind one result: each Reddit thread, with a link to every comment that was counted](docs/screenshots/evidence.png)
 
 ---
 
@@ -230,6 +230,17 @@ backend/
 A run is a row in Postgres and a job in a queue. The worker claims it, streams progress back, and
 the API decides what a client is allowed to see at each status. `domain/` and `ranking/` import
 nothing from the adapters, and a test enforces that.
+
+---
+
+## How it was built
+
+Built by one developer with [Claude Code](https://claude.com/claude-code) as the coding agent.
+[`PROJECT.md`](PROJECT.md) is the product and architecture brief, and
+[`implementation-plan.md`](implementation-plan.md) breaks it into numbered phases. Each phase was
+run through [`/phase`](.claude/commands/phase.md): read the briefs, build that phase and nothing
+ahead of it, pass lint, type checks and tests, and stop with a written report to review.
+[`CLAUDE.md`](CLAUDE.md) holds the working agreement those sessions followed.
 
 ---
 

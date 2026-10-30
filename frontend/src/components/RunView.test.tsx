@@ -217,10 +217,10 @@ describe("A run at its own URL", () => {
 
     render(<RunView researchId="r1" />);
 
-    expect(await screen.findByText("pending")).toBeInTheDocument();
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
 
     current = statusResponse({ status: "discovering", message: "Searching." });
-    expect(await screen.findByText("discovering")).toBeInTheDocument();
+    expect(await screen.findByText("Searching")).toBeInTheDocument();
 
     current = statusResponse({ status: "completed", message: resultsResponse.message });
     expect(await screen.findByText("Alaska")).toBeInTheDocument();
@@ -253,7 +253,7 @@ describe("A run at its own URL", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(api.clarifyResearch).toHaveBeenCalledWith("r1", "state");
-    expect(await screen.findByText("discovering")).toBeInTheDocument();
+    expect(await screen.findByText("Searching")).toBeInTheDocument();
   });
 
   it("shows a plain terminal message for a rejected research, with no results call", async () => {

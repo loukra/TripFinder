@@ -42,6 +42,28 @@ describe("EvidencePanel", () => {
     expect(screen.getByText("https://reddit.com/a")).toBeInTheDocument();
   });
 
+  it("names each thread once and keeps one link per comment", async () => {
+    const thread = "https://www.reddit.com/r/AskAnAmerican/comments/15bwaju/which_states_are_the_most_underrated";
+    const first = `${thread}/jttqemq/`;
+    const second = `${thread}/jttzzzz/`;
+    vi.mocked(api.getEvidence).mockResolvedValue({
+      entity_id: "state:arkansas",
+      entity_name: "Arkansas",
+      total: 2,
+      limit: 10,
+      offset: 0,
+      permalinks: [first, second],
+    });
+
+    render(<EvidencePanel researchId="r1" entityId="state:arkansas" entityName="Arkansas" />);
+
+    expect(await screen.findAllByText("Which states are the most underrated")).toHaveLength(1);
+    expect(screen.getByText("r/AskAnAmerican")).toBeInTheDocument();
+    expect(screen.getByText("comment 1 ↗").closest("a")).toHaveAttribute("href", first);
+    expect(screen.getByText("comment 2 ↗").closest("a")).toHaveAttribute("href", second);
+    expect(screen.getByText("2 comments cited as evidence")).toBeInTheDocument();
+  });
+
   it("shows an empty state when there is no evidence", async () => {
     vi.mocked(api.getEvidence).mockResolvedValue({
       entity_id: "state:alaska",

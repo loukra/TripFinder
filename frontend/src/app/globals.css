@@ -489,6 +489,13 @@ fieldset {
   max-width: var(--measure-run);
 }
 
+/* The header is the layout's and cannot know which page it sits above, so
+   on a run it follows the wider page rather than leaving the logo indented
+   from the query beneath it. */
+body:has(.page-run) .site-header {
+  max-width: var(--measure-run);
+}
+
 /* — hero / search — */
 
 .hero {
@@ -926,6 +933,55 @@ fieldset {
   text-transform: uppercase;
 }
 
+.stat-more {
+  margin-top: 12px;
+  border-radius: 22px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.stat-more > summary {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  list-style: none;
+}
+
+.stat-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.stat-more > summary::after {
+  content: "›";
+  margin-left: auto;
+  font-size: 16px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  transition: transform 0.2s ease;
+}
+
+.stat-more[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.stat-list {
+  padding: 0 16px 12px;
+  font-size: 12px;
+}
+
+.stat-list-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--color-divider);
+}
+
+.stat-list-row dd {
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-actions {
   margin-top: 22px;
 }
@@ -1096,11 +1152,41 @@ fieldset {
   list-style: none;
 }
 
-.evidence-list a {
+.evidence-raw {
   font-size: 12px;
   font-family: ui-monospace, Menlo, monospace;
   line-height: 1.4;
   word-break: break-all;
+}
+
+.evidence-thread-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: var(--color-surface);
+}
+
+.evidence-thread {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+
+.evidence-comment {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.evidence-comment:hover {
+  text-decoration: underline;
 }
 
 .evidence-more {
