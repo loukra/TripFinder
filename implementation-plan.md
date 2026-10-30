@@ -829,6 +829,79 @@ from an assertion into a reading. Nothing in this codebase counts a token today.
 minimum needed to compare a hit against a miss; deciding what to *do* about the number is 14.11's
 job, not this one's.
 
+#### 2.15.1 What 14.10 settled — and the one thing it deliberately did not measure
+
+Three decisions were made while building it that the text above left open.
+
+**The key excludes what the model *suggests*, not only what it is unsure of.** §2.15 named the
+normalised query, scope, granularity and criteria. It did not say what to do with `seedQueries` and
+`candidateSubreddits`, which `ResearchPlan` also carries. They are out, and the reason is §2.14.4:
+discovery is an agentic loop that proposes different queries every run, so a key including them
+would change on almost every run and the cache would never hit — a feature that silently does
+nothing, which is worse than one that is absent. `granularityConfidence` is out for a different
+reason: how sure the model was is a fact about the model that day, not about the question.
+
+**Reuse is one link long.** A run that was itself answered from the archive is never a source for a
+third. Nothing in §2.15 required this, and without it the date on the label drifts forward one hop
+at a time until a year-old answer is being shown as this month's — rule 1 broken not by omitting the
+label but by the label going quietly wrong.
+
+**The label is a type, not a convention.** `reused` is an object carrying the source run's id *and*
+the date it was produced, so there is no shape of response that says an answer was reused without
+saying when. §2.15 rule 1 asked for a test proving the label cannot be absent; making the two fields
+one object is the stronger version of that, and the test is still there.
+
+#### 2.15.2 The amendment: `completed` is not a state this product reaches
+
+The acceptance criterion above said a cache hit on a `completed_partial` run is refused — *only a
+run that actually finished may answer for a later question*. It was implemented exactly as written,
+and then the table was read:
+
+```
+completed_partial   19     ← 18 of them flagged budget_limit_reached
+failed               5
+cancelled            5
+completed            5     ← all from 9–10 Sept, all from before the streaming pipeline
+completed_degraded   4
+```
+
+**Since the real pipeline landed, no run has ever reached `completed`.** Every one stops at the
+duration budget, which is not an accident: §2.14.1 raised every other budget past what three minutes
+can consume *deliberately*, so that breadth is bought until the clock stops the run. The rule as
+written therefore made reuse a feature that could not fire — the same "knob that lies" this plan
+objects to in `maxEstimatedCostUsd`, one layer up.
+
+The distinction the rule was reaching for is not *finished* versus *unfinished*. It is **was this a
+real reading?** — and §2.12.2 already answers that for a budget-limited run: *what was read was read
+properly, and the corpus is a real but incomplete sample*. So:
+
+- `completed` and `completed_partial` may answer.
+- `completed_degraded` may not: §8.1 rule 2 suppressed its percentages because the source was
+  unhealthy, so there is no trustworthy denominator to hand forward.
+- `failed` and `source_unavailable` may not: no corpus at all.
+- `cancelled` may not: stopped part-way by a person, and what it holds is a §2.13.2 snapshot —
+  display state, never a run's answer.
+
+**The reusing run takes the source's status**, never `completed`. A partial answer relabelled as a
+finished one on the way through would be §0.1 rule 4 — a degraded outcome described in the words of
+a genuine one — committed by the one step whose entire job is to stop an old answer from looking
+new. A reused partial is `completed_partial`, says §7.1's partial sentence and carries the same
+flags. The list of reusable statuses lives in `domain/models.py` beside `HALTING_STATUSES`, because
+the repository has to *find* such a run and the step has to *accept* one, and a rule written out
+twice is a rule that drifts.
+
+**The lesson is about the order of work, not the rule.** The acceptance criterion was satisfiable
+and wrong, and nothing in the test suite could have said so, because the tests construct the
+statuses they assert on. Reading the production table would have. For any phase whose behaviour
+depends on a state a real run reaches, that read comes before the implementation, not after it.
+
+**What was not done: no price list.** The run records tokens — prompt, completion, total, and
+separately the number of calls whose usage the provider never reported, because an unmeasured call
+is *unknown* and must not read as free (§0.1 in its cheapest form). It does not convert them to
+money. Turning tokens into dollars needs a price per model in config, and the phase that needs that
+number is 14.11, which has to compare it against `maxEstimatedCostUsd` anyway. A price constant
+introduced here would have been a second place to keep it correct, for no reader.
+
 **14.11 — a cap on spend.** `maxEstimatedCostUsd` has been in `ResearchBudget` since Phase 1 and is
 read by no line of code — a knob that lies, which is the same failure this plan forbids everywhere
 else. Measured across two real runs the shape is already clear: 85–126 analysis calls against
@@ -1027,6 +1100,7 @@ branch to clarification (§6), and **Document Triage is added** as its own step.
 | # | Step | AI? | Notes |
 |---|---|---|---|
 | 1 | Query Understanding | **AI** | → plan · clarification · rejection |
+| **1.5** | **Prior Answer Reuse** | no | **Added in 14.10 — §2.15. Keys the run on its plan, and answers from an earlier run if one fits. The last point at which a run has spent nothing but step 1** |
 | 2 | Research Planning | no | Budget allocation |
 | 3 | Agentic Source Discovery | **AI** | Bounded, via the web search tool; hydrated through the source adapter (§2.11) |
 | 4 | **Source Document Triage** | **AI** + rules | **New — §4.7. Gates everything downstream** |
@@ -1042,6 +1116,12 @@ branch to clarification (§6), and **Document Triage is added** as its own step.
 | 14 | Persistence | no | |
 
 Five AI steps. Everything that touches the final number is deterministic.
+
+**Step 1.5 is deliberately not an AI step**, although it is the one step whose job is to recognise
+that two questions are the same question. The recognition is already paid for: Query Understanding
+produced a plan, and equality of plans is a comparison, not a judgement. A model asked "is this the
+same question?" would be a second opinion about the first opinion, with nothing to check it
+against — and it would make reuse, whose whole purpose is to avoid a call, cost one.
 
 ### 4.7 Step 4 — Source Document Triage
 
@@ -1524,9 +1604,11 @@ criteria differ does not; a run older than the window is never reused; a reused 
 with the date it was produced, everywhere that answer is shown, and a test proves the label cannot be
 absent; asking for a fresh run bypasses the cache entirely and produces a new run with its own id,
 leaving the old one intact in the history; a cache hit on a `completed_partial`, `failed` or
-`cancelled` run is refused — only a run that actually finished may answer for a later question; and
-every LLM call records the tokens it used and the run carries the totals in `statistics`, so the
-saving a hit produces is a number on the two runs rather than a claim about them.
+`cancelled` run is refused — ~~only a run that actually finished may answer for a later question~~
+**amended, see §2.15.2: a `completed_partial` run may answer, and the reused run carries its status
+forward rather than relabelling it**; and every LLM call records the tokens it used and the run
+carries the totals in `statistics`, so the saving a hit produces is a number on the two runs rather
+than a claim about them.
 
 **Phase 14.11 — acceptance (§2.15):** `maxEstimatedCostUsd` refuses to admit an analysis batch
 whose estimated cost does not fit what is left in the purse, records the refusal as a suppression
@@ -1544,10 +1626,16 @@ analysis dominates a run is read off the run rather than assumed; and prices liv
 ```
 POST   /api/research                    -> {id, status}   (14.10: may answer from a previous run;
                                            `fresh=true` never does)
+                                        body: {query, fresh?}  — `fresh` is stored on the run's
+                                           own config, not held in the request (§2.15)
 GET    /api/research                    -> 14.9: past runs, newest first, paginated
 GET    /api/research/{id}               -> status, progress, statistics, budget used, and
                                            (14.9) the question asked and the date it was asked,
-                                           since a run is now opened by people who did not start it
+                                           since a run is now opened by people who did not start it,
+                                           and (14.10) `reused: {research_id, answered_at} | null` —
+                                           carried by every response that shows this run's answer
+                                           (status, results, and each history row), because an
+                                           answer labelled in one of them is labelled nowhere
 POST   /api/research/{id}/clarify       -> answer a ClarificationRequest, resume
 GET    /api/research/{id}/results       -> ranked results, strong and weak (§2.13.3: also
                                            served while `analyzing`, flagged `provisional`)

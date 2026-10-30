@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from tripfinder.ai.factory import build_llm_provider
 from tripfinder.domain.models import Research, ResearchStatus
+from tripfinder.domain.ports import AnswerArchive
+from tripfinder.domain.usage import TokenLedger
 from tripfinder.pipeline.base import PartialResultsListener, PipelineContext
 from tripfinder.pipeline.runner import PipelineRunner, ProgressListener
 from tripfinder.pipeline.steps.aggregation import AggregationStep
+from tripfinder.pipeline.steps.answer_reuse import AnswerReuseStep
 from tripfinder.pipeline.steps.entity_resolution import EntityResolutionStep
 from tripfinder.pipeline.steps.health import SourceHealthAssessmentStep
 from tripfinder.pipeline.steps.preflight import SourcePreflightStep
@@ -41,7 +44,16 @@ from tripfinder.sources.arctic_shift.adapter import ArcticShiftAdapter
 # call until the source has returned `minPostsRetrieved` documents, and the
 # step here keeps its second job, which is deciding what the run's outcome
 # is (§8.1).
+#
+# `AnswerReuseStep` (§4.6 step 1.5) heads the list because it is the last
+# chance to not spend anything: everything below it costs money, and it is
+# the step that may find the question has already been answered (§2.15).
+# Heading *this* tuple rather than sitting in `build_pipeline_runner` also
+# puts it in the resumed pipeline, where it belongs — a run that paused for
+# clarification has just settled on a plan, and a plan is exactly what the
+# archive is keyed on.
 _POST_UNDERSTANDING_STEPS = (
+    AnswerReuseStep,
     StreamingStrandsStep,
     SourceHealthAssessmentStep,
     EntityResolutionStep,
@@ -90,6 +102,7 @@ def build_pipeline_context_for(
     *,
     settings: Settings,
     on_partial_results: PartialResultsListener | None = None,
+    archive: AnswerArchive | None = None,
 ) -> PipelineContext:
     """A context wired to the real adapters this process is configured for.
 
@@ -102,15 +115,29 @@ def build_pipeline_context_for(
     still analysing (plan §2.13). Left unset, the run produces none — the
     pipeline is unchanged, it simply reports once at the end as it did
     before.
+
+    ``archive`` is the earlier answers this run may reuse (plan §2.15).
+    Left unset, it reuses nothing and does all the work itself — which is
+    what every caller without a database wants, and what every run did
+    before 14.10.
+
+    The token ledger is created here, given to the provider and kept on the
+    context, so that the thing that spends and the thing that reports are
+    the same object rather than two counts that can disagree.
     """
     source = ArcticShiftAdapter()
-    llm = build_llm_provider(settings.llm_provider, openai_api_key=settings.openai_api_key)
+    ledger = TokenLedger()
+    llm = build_llm_provider(
+        settings.llm_provider, openai_api_key=settings.openai_api_key, ledger=ledger
+    )
     search = build_search_provider(settings.search_provider, serper_api_key=settings.serper_api_key)
     context = PipelineContext(
         research=research,
         source=source,
         search=search,
         llm=llm,
+        archive=archive,
+        usage=ledger,
         on_partial_results=on_partial_results,
     )
     if research.resume_plan is not None:

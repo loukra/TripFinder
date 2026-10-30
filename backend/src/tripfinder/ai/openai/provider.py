@@ -30,6 +30,7 @@ from tripfinder.ai.errors import (
     LLMUnavailableError,
 )
 from tripfinder.ai.openai.config import OpenAIConfig
+from tripfinder.domain.usage import CallUsage, TokenLedger
 
 MISSING_KEY_MESSAGE = (
     "no OpenAI API key is configured, so no model call can be made "
@@ -57,6 +58,20 @@ def _build_client(config: OpenAIConfig, api_key: SecretStr | None) -> AsyncOpenA
         timeout=config.timeout_seconds,
         max_retries=config.max_retries,
     )
+
+
+def _usage_of(response: ParsedResponse[Any]) -> CallUsage | None:
+    """What the Responses API said this call used, or ``None`` if it said nothing.
+
+    ``None`` is not zero and must never be recorded as zero (plan §0.1 in
+    its cheapest form): a response without a usage block is a call whose
+    cost is *unknown*, and :class:`TokenLedger` counts those separately so a
+    total can never quietly describe fewer calls than were made.
+    """
+    usage = response.usage
+    if usage is None:
+        return None
+    return CallUsage(prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens)
 
 
 def _unusable_output_detail(response: ParsedResponse[Any]) -> str:
@@ -91,9 +106,11 @@ class OpenAIProvider:
         *,
         api_key: SecretStr | None = None,
         client: AsyncOpenAI | None = None,
+        ledger: TokenLedger | None = None,
     ) -> None:
         self._config = config or OpenAIConfig()
         self._client = client if client is not None else _build_client(self._config, api_key)
+        self._ledger = ledger
 
     def _reasoning(self) -> Reasoning | Omit:
         """The configured effort, or the SDK's "say nothing" sentinel.
@@ -145,6 +162,13 @@ class OpenAIProvider:
             raise LLMResponseError(
                 f"OpenAI's answer did not match {response_model.__name__}: {exc}"
             ) from exc
+
+        # Recorded before the answer is judged usable: the call was made and
+        # it was billed, whether or not what came back can be used (plan
+        # §2.15). A cost that only appears on successful calls understates
+        # exactly the runs worth investigating.
+        if self._ledger is not None:
+            self._ledger.record(_usage_of(response))
 
         parsed = response.output_parsed
         if parsed is None:

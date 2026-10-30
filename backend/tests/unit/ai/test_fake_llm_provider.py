@@ -2,6 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from tripfinder.ai.fake import FakeLLMProvider
+from tripfinder.domain.usage import TokenLedger
 
 
 class _Widget(BaseModel):
@@ -67,3 +68,33 @@ async def test_queued_response_of_the_wrong_type_raises() -> None:
 
     with pytest.raises(TypeError):
         await provider.complete_structured(prompt="a", response_model=_Widget)
+
+
+# Plan §2.15: the fake counts its calls too, so the code that reads a run's
+# spend is exercised by the ordinary suite rather than only in production.
+
+
+async def test_the_fake_counts_its_calls_and_costs_none_of_them() -> None:
+    ledger = TokenLedger()
+    provider = FakeLLMProvider({_Gadget: _Gadget(label="ok")}, ledger=ledger)
+
+    await provider.complete_structured(prompt="a", response_model=_Gadget)
+    await provider.complete_structured(prompt="b", response_model=_Gadget)
+
+    assert ledger.totals() == {
+        "llm_calls": 2,
+        "llm_prompt_tokens": 0,
+        "llm_completion_tokens": 0,
+        "llm_total_tokens": 0,
+        "llm_calls_without_usage": 2,
+    }
+
+
+async def test_a_canned_answer_is_unknown_rather_than_free() -> None:
+    """Zero tokens over zero calls and zero tokens over two calls say different things."""
+    ledger = TokenLedger()
+    provider = FakeLLMProvider({_Gadget: _Gadget(label="ok")}, ledger=ledger)
+
+    await provider.complete_structured(prompt="a", response_model=_Gadget)
+
+    assert ledger.totals() != TokenLedger().totals()

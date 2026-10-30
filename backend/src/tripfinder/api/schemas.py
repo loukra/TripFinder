@@ -18,12 +18,23 @@ from tripfinder.domain.models import (
     ResearchFailure,
     ResearchStatus,
     Result,
+    ReusedAnswer,
     SourceHealth,
 )
 
 
 class ResearchCreateRequest(BaseModel):
     query: str = Field(min_length=1)
+    fresh: bool = False
+    """Ask for the work to be done again, whatever has been answered before.
+
+    Plan §2.15 rule 2 — *a fresh run is always one click away, and it never
+    consults the cache*. It creates an ordinary run with a new id; the old
+    one stays where it is, in history, still reachable. This is a request
+    flag rather than a query parameter because it changes what the run *is*,
+    and the run stores that decision in its own config (``ReuseConfig``)
+    rather than forgetting it the moment the request ends.
+    """
 
 
 class ResearchCreateResponse(BaseModel):
@@ -46,6 +57,16 @@ class ResearchStatusResponse(BaseModel):
     normalized_query: str | None = None
     created_at: datetime | None = None
     """When the run was started — the date a history entry is listed under."""
+    reused: ReusedAnswer | None = None
+    """Set when this run is showing an earlier run's answer (plan §2.15).
+
+    Present on **every** response that carries this run's answer, not only
+    the results one: a status poll, a history row and a results page are
+    three places the same ranking is described, and an answer that is
+    labelled in one of them and bare in the other two is labelled nowhere
+    that matters. The date travels inside the object, so a client that
+    knows an answer was reused always has what it needs to say when.
+    """
     statistics: dict[str, int]
     diagnostics: ResearchDiagnostics
     """What the run suppressed and why — exposed, not merely logged (plan §0.1 rule 2)."""
@@ -119,6 +140,14 @@ class ResearchResultsResponse(BaseModel):
     were the first says something false about a real count — which is why
     the threshold travels with the response.
     """
+    reused: ReusedAnswer | None = None
+    """Set when this ranking was produced by an earlier run (plan §2.15).
+
+    The same flag-plus-date pair the status response carries, for the same
+    reason §2.13.3 gives for ``provisional``: a ranking that is not what it
+    appears to be has to say so where it is shown, not somewhere a caller
+    might have looked first.
+    """
     minimum_independent_users: int = 0
     """§4.4's strong-recommendation threshold for this run.
 
@@ -151,6 +180,14 @@ class ResearchListItem(BaseModel):
     status: ResearchStatus
     message: str
     result_count: int | None
+    reused: ReusedAnswer | None = None
+    """Set when this row's answer came from an earlier run (plan §2.15).
+
+    A history list is one of the places the answer is *shown* — a row
+    saying "Finished · 5 results" under today's date, for a ranking
+    produced in March, is the §2.15 rule 1 failure in its most compact
+    form. The row carries the original's date so it can say so.
+    """
 
 
 class ResearchListResponse(BaseModel):

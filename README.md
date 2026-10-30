@@ -58,6 +58,18 @@ If you only read one file, read [`PROJECT.md`](PROJECT.md) — it is the argumen
 You watch all of this happen: the ranking appears while the run is still reading and grows as it
 goes, clearly marked as provisional until the corpus closes.
 
+**A question already answered is not answered twice.** After step 1, the run is keyed on what the
+question *means* rather than how it was typed — so "best states for nature" and "Best states for
+nature?" land on the same answer — and if a finished run answered it within the last six months,
+that run's counts are shown instead of a hundred and thirty more model calls being spent. The
+answer always says the date it was produced, wherever it appears, and **"Research it again" is
+always one click away and never looks at the cache**.
+
+Only a run that read its corpus properly may answer for a later question. A run stopped by its own
+time budget qualifies — it read what it read properly, and it stays labelled as partial when it is
+reused, rather than being quietly promoted to "finished". A run whose source was unhealthy, or that
+failed or was cancelled, never answers for anything.
+
 ---
 
 ## Running it
@@ -224,9 +236,11 @@ nothing from the adapters, and a test enforces that.
 ## Status
 
 Working and usable, and not finished. Built in numbered phases (see `implementation-plan.md` §10);
-the current head is Phase 14.9. Known gaps are written down rather than hidden — the duration budget
-governs only part of a run, nothing counts tokens, and reuse of a previous answer is designed but
-not built.
+the current head is Phase 14.10. Known gaps are written down rather than hidden — the duration
+budget governs only the dispatch of analysis rather than the whole run, and `maxEstimatedCostUsd`
+is still a knob no code reads. Every run now records the tokens it spent, and separately how many
+of its calls the provider reported no usage for, because an unmeasured call is unknown rather than
+free; turning those tokens into money is the next phase's job.
 
 Issues and pull requests welcome. If you find a case where a failure managed to look like a finding,
 that is the most interesting bug you can report.

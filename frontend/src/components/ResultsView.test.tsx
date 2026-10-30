@@ -19,6 +19,7 @@ function makeData(overrides: Partial<ResearchResultsResponse> = {}): ResearchRes
     provisional: false,
     weak_results: [],
     minimum_independent_users: 5,
+    reused: null,
     results: [
       {
         entity_id: "state:alaska",
@@ -382,6 +383,75 @@ describe("ResultsView, while a run is still counting", () => {
     );
 
     expect(namesInOrder()).toEqual(["Vermont", "Maine"]);
+  });
+});
+
+describe("a reused answer (plan §2.15)", () => {
+  const REUSED = { research_id: "r0", answered_at: "2026-03-04T09:30:00Z" };
+
+  it("says the date the answer was produced", () => {
+    render(<ResultsView researchId="r1" data={makeData({ reused: REUSED })} />);
+
+    expect(screen.getByRole("note")).toHaveTextContent("Answered on 4 March 2026");
+  });
+
+  it("says it even when the ranking came out empty", () => {
+    // The empty state is the easiest place for a label to be forgotten, and
+    // the worst place to forget it: "nothing found" from six months ago is
+    // a claim about today unless it is dated.
+    render(
+      <ResultsView
+        researchId="r1"
+        data={makeData({ results: [], weak_results: [], reused: REUSED })}
+      />
+    );
+
+    expect(screen.getByRole("note")).toHaveTextContent("Answered on 4 March 2026");
+  });
+
+  it("links to the run the answer came from", () => {
+    render(<ResultsView researchId="r1" data={makeData({ reused: REUSED })} />);
+
+    expect(screen.getByRole("link", { name: "See the original run" })).toHaveAttribute(
+      "href",
+      "/research/r0"
+    );
+  });
+
+  it("offers a fresh run, and asks for one when clicked", async () => {
+    const user = userEvent.setup();
+    const onRunAgain = vi.fn();
+    render(
+      <ResultsView researchId="r1" data={makeData({ reused: REUSED })} onRunAgain={onRunAgain} />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Research it again" }));
+
+    expect(onRunAgain).toHaveBeenCalledOnce();
+  });
+
+  it("still says the date when nothing can be done about it", () => {
+    // The label is not conditional on the page being able to offer a rerun.
+    render(<ResultsView researchId="r1" data={makeData({ reused: REUSED })} />);
+
+    expect(screen.queryByRole("button", { name: "Research it again" })).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent("Answered on 4 March 2026");
+  });
+
+  it("says nothing at all when the run did its own work", () => {
+    render(<ResultsView researchId="r1" data={makeData()} />);
+
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("does not describe a reused answer as provisional", () => {
+    // Two different things a ranking can fail to be, and §0.1 rule 4 says
+    // they may not share wording: one is unfinished, the other is finished
+    // and old.
+    render(<ResultsView researchId="r1" data={makeData({ reused: REUSED })} />);
+
+    expect(screen.queryByText(/still counting/i)).toBeNull();
+    expect(screen.getByText(/42% of people who answered/)).toBeInTheDocument();
   });
 });
 

@@ -36,6 +36,20 @@ class ResearchRow(Base):
     clarification: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     pending_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     resume_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    """The reuse key (plan §2.15). Indexed — it is looked up by, never scanned for."""
+    reused: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    """Whether this run answered from an earlier one, and when that answer was produced.
+
+    ``none_as_null`` because this column is **queried** for absence, and a
+    JSON column does not store Python ``None`` as SQL ``NULL`` by default —
+    it stores the JSON value ``null``, which ``IS NULL`` does not match. The
+    other JSONB columns here keep the default because nothing looks for a
+    null in them; this one decides whether a run may answer for a later
+    question (``find_by_fingerprint``), and getting it wrong means the
+    lookup silently matches nothing at all.
+    """
 
 
 class ResearchJobRow(Base):

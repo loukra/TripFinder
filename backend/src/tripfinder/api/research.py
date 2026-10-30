@@ -62,6 +62,7 @@ from tripfinder.api.schemas import (
     ResultItem,
     SourceUnavailableError,
 )
+from tripfinder.domain.config import ResearchConfig
 from tripfinder.domain.models import ClarificationRequest, Research, ResearchStatus, Result
 from tripfinder.jobs.repository import JobRepository
 from tripfinder.persistence.repositories import ResearchRepository, ResearchSummary
@@ -100,10 +101,21 @@ _UNCANCELLABLE_STATUSES = frozenset(
 async def create_research(
     body: ResearchCreateRequest, session: SessionDep
 ) -> ResearchCreateResponse:
+    # Plan §2.15 rule 2: `fresh=true` is a run that never consults the
+    # cache. The decision is written into the config this run persists
+    # rather than carried in the request, so the run's own record says
+    # whether it was allowed to reuse — the worker reads it hours later,
+    # and a flag that lived only in the HTTP request would be gone by then.
+    config = ResearchConfig()
+    if body.fresh:
+        config = config.model_copy(
+            update={"reuse": config.reuse.model_copy(update={"enabled": False})}
+        )
     research = Research(
         original_query=body.query,
         created_at=datetime.now(UTC),
         status=ResearchStatus.PENDING,
+        research_config=config,
     )
     await ResearchRepository(session).create(research)
     await JobRepository(session).enqueue(research.id)
@@ -267,6 +279,7 @@ async def get_research_results(
         message=results_message(research.status),
         percentages_suppressed=suppress_share,
         provisional=is_provisional(research.status),
+        reused=research.reused,
         results=[
             ResultItem.from_domain(result, suppress_share=suppress_share)
             for result in research.results
@@ -333,6 +346,7 @@ def _status_response(research: Research) -> ResearchStatusResponse:
         query=research.original_query,
         normalized_query=research.normalized_query,
         created_at=research.created_at,
+        reused=research.reused,
         statistics=research.statistics,
         diagnostics=research.diagnostics,
         clarification=_visible_clarification(research),
@@ -378,6 +392,7 @@ def _list_item(summary: ResearchSummary) -> ResearchListItem:
             if _has_results_page(summary.status, has_results=ranked)
             else None
         ),
+        reused=summary.reused,
     )
 
 

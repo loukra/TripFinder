@@ -12,6 +12,7 @@ from tripfinder.ai.errors import (
 )
 from tripfinder.ai.fake import FakeLLMProvider
 from tripfinder.domain.models import FailureKind, Research, ResearchStatus, Result
+from tripfinder.domain.usage import CallUsage
 from tripfinder.pipeline.base import PipelineContext, PipelineStep, ProgressEvent
 from tripfinder.pipeline.runner import PipelineRunner
 from tripfinder.search.fake import FakeSearchProvider
@@ -386,3 +387,117 @@ class TestTheDurationBudgetIsMeasuredFromThisPass:
         assert ran == [f"step{index}" for index in range(1, 8)]
         assert context.research.results != []
         assert context.research.status is ResearchStatus.COMPLETED_PARTIAL
+
+
+# Plan §2.15 — a run that answered from the archive, and what every run
+# records about what it spent.
+
+
+class _AnswersFromTheArchiveStep:
+    """Stands in for ``AnswerReuseStep``: a finished answer, already on the row."""
+
+    name = "answer_reuse"
+
+    async def run(self, context: PipelineContext) -> PipelineContext:
+        context.research.status = ResearchStatus.COMPLETED
+        context.answered = True
+        return context
+
+
+class _MustNotRunStep:
+    name = "expensive"
+
+    async def run(self, context: PipelineContext) -> PipelineContext:
+        raise AssertionError("a reused answer must not pay for the pipeline again")
+
+
+class _SpendsStep:
+    """A step that makes model calls, without caring what they returned."""
+
+    def __init__(self, name: str, calls: int) -> None:
+        self.name = name
+        self._calls = calls
+
+    async def run(self, context: PipelineContext) -> PipelineContext:
+        for _ in range(self._calls):
+            context.usage.record(CallUsage(prompt_tokens=1000, completion_tokens=200))
+        return context
+
+
+async def test_an_answered_run_stops_before_the_steps_that_would_cost_money() -> None:
+    runner = PipelineRunner([_AnswersFromTheArchiveStep(), _MustNotRunStep()])
+
+    context = await runner.run(_context())
+
+    assert context.research.status is ResearchStatus.COMPLETED
+    assert [event.step_name for event in context.progress] == ["answer_reuse"]
+
+
+async def test_completed_alone_does_not_stop_the_pipeline() -> None:
+    """The reason ``answered`` is a flag and not a status.
+
+    ``source_health_assessment`` sets ``completed`` in the middle of a run
+    and four steps legitimately follow it, so "completed" cannot mean
+    "stop" — only a step that has the whole answer already may say that.
+    """
+    runner = PipelineRunner(
+        [
+            _SetsStatusStep("source_health_assessment", ResearchStatus.COMPLETED),
+            _SetsStatusStep("aggregation", ResearchStatus.COMPLETED),
+        ]
+    )
+
+    context = await runner.run(_context())
+
+    assert [event.step_name for event in context.progress] == [
+        "source_health_assessment",
+        "aggregation",
+    ]
+
+
+async def test_a_run_records_what_it_spent() -> None:
+    runner = PipelineRunner([_SpendsStep("understanding", 1), _SpendsStep("analysis", 4)])
+
+    context = await runner.run(_context())
+
+    assert context.research.statistics["llm_calls"] == 5
+    assert context.research.statistics["llm_total_tokens"] == 6000
+
+
+async def test_a_failed_run_records_what_it_spent_before_it_failed() -> None:
+    """A run that died after forty calls has spent forty calls.
+
+    Recording only on success would make the cheapest-looking runs the ones
+    that went wrong, which is the reading a cost record exists to prevent.
+    """
+    runner = PipelineRunner(
+        [_SpendsStep("analysis", 3), _RaisingProviderStep(LLMUnavailableError("gone"))]
+    )
+
+    context = await runner.run(_context())
+
+    assert context.research.status is ResearchStatus.FAILED
+    assert context.research.statistics["llm_calls"] == 3
+
+
+async def test_an_answered_run_records_its_own_spend_over_the_one_it_copied() -> None:
+    """A hit shows the old run's statistics and its own bill.
+
+    The copied numbers describe the answer — 27 discussions, because there
+    were 27. ``llm_calls`` describes *this* run, and overwriting it is what
+    turns "reuse saves money" into two numbers that can be compared.
+    """
+
+    class _CopiesAnExpensiveAnswer:
+        name = "answer_reuse"
+
+        async def run(self, context: PipelineContext) -> PipelineContext:
+            context.research.statistics = {"posts_analyzed": 27, "llm_calls": 131}
+            context.usage.record(None)
+            context.answered = True
+            return context
+
+    context = await PipelineRunner([_CopiesAnExpensiveAnswer()]).run(_context())
+
+    assert context.research.statistics["posts_analyzed"] == 27
+    assert context.research.statistics["llm_calls"] == 1

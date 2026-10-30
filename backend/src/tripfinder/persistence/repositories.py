@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tripfinder.domain.config import ResearchConfig
 from tripfinder.domain.models import (
+    REUSABLE_STATUSES,
     ClarificationRequest,
     PendingPlan,
     Research,
@@ -32,6 +33,7 @@ from tripfinder.domain.models import (
     ResearchPlan,
     ResearchStatus,
     Result,
+    ReusedAnswer,
 )
 from tripfinder.persistence.orm import ResearchRow
 
@@ -51,6 +53,9 @@ def _to_row(research: Research) -> ResearchRow:
         clarification=_dump(research.clarification),
         pending_plan=_dump(research.pending_plan),
         resume_plan=_dump(research.resume_plan),
+        plan=_dump(research.plan),
+        plan_fingerprint=research.plan_fingerprint,
+        reused=_dump(research.reused),
     )
 
 
@@ -69,16 +74,19 @@ def _to_domain(row: ResearchRow) -> Research:
         clarification=_load(ClarificationRequest, row.clarification),
         pending_plan=_load(PendingPlan, row.pending_plan),
         resume_plan=_load(ResearchPlan, row.resume_plan),
+        plan=_load(ResearchPlan, row.plan),
+        plan_fingerprint=row.plan_fingerprint,
+        reused=_load(ReusedAnswer, row.reused),
     )
 
 
 def _dump(
-    model: ClarificationRequest | PendingPlan | ResearchPlan | None,
+    model: ClarificationRequest | PendingPlan | ResearchPlan | ReusedAnswer | None,
 ) -> dict[str, Any] | None:
     return model.model_dump(mode="json") if model is not None else None
 
 
-def _load[T: (ClarificationRequest, PendingPlan, ResearchPlan)](
+def _load[T: (ClarificationRequest, PendingPlan, ResearchPlan, ReusedAnswer)](
     model_type: type[T], value: dict[str, Any] | None
 ) -> T | None:
     return model_type.model_validate(value) if value is not None else None
@@ -101,6 +109,12 @@ class ResearchSummary:
     status: ResearchStatus
     result_count: int
     weak_result_count: int
+    reused: ReusedAnswer | None
+    """Set when this run showed an earlier run's answer (plan §2.15).
+
+    Loaded for the list because the date on it is what stops a history row
+    from presenting a March answer under today's date — small enough to
+    ship with a projection built to avoid shipping the big JSONB blobs."""
 
 
 class ResearchNotFoundError(LookupError):
@@ -133,6 +147,9 @@ class ResearchRepository:
         row.clarification = _dump(research.clarification)
         row.pending_plan = _dump(research.pending_plan)
         row.resume_plan = _dump(research.resume_plan)
+        row.plan = _dump(research.plan)
+        row.plan_fingerprint = research.plan_fingerprint
+        row.reused = _dump(research.reused)
         await self._session.commit()
 
     async def list_recent(self, *, limit: int, offset: int = 0) -> list[ResearchSummary]:
@@ -151,6 +168,7 @@ class ResearchRepository:
                 ResearchRow.status,
                 func.jsonb_array_length(ResearchRow.results).label("result_count"),
                 func.jsonb_array_length(ResearchRow.weak_results).label("weak_result_count"),
+                ResearchRow.reused,
             )
             .order_by(ResearchRow.created_at.desc(), ResearchRow.id.desc())
             .limit(limit)
@@ -165,9 +183,42 @@ class ResearchRepository:
                 status=ResearchStatus(row.status),
                 result_count=row.result_count,
                 weak_result_count=row.weak_result_count,
+                reused=_load(ReusedAnswer, row.reused),
             )
             for row in rows.all()
         ]
+
+    async def find_by_fingerprint(
+        self, *, fingerprint: str, not_before: datetime
+    ) -> Research | None:
+        """The newest run carrying this reuse key inside the window (plan §2.15).
+
+        The status filter and "not itself a reuse" are in the query rather
+        than left to the caller, and neither is policy: without them the
+        newest matching row wins, so a question asked twice this morning
+        would be offered yesterday's good answer only when this morning's
+        failure did not exist. They narrow *which* row comes back. Whether
+        it may be used is re-decided by ``AnswerReuseStep`` against the run
+        itself, from the same ``REUSABLE_STATUSES`` — one list, imported
+        here rather than restated, so the query and the rule cannot drift
+        apart and leave a run that is findable but unusable.
+        """
+        row = (
+            await self._session.execute(
+                select(ResearchRow)
+                .where(
+                    ResearchRow.plan_fingerprint == fingerprint,
+                    ResearchRow.created_at >= not_before,
+                    ResearchRow.status.in_(
+                        [status.value for status in REUSABLE_STATUSES]
+                    ),
+                    ResearchRow.reused.is_(None),
+                )
+                .order_by(ResearchRow.created_at.desc(), ResearchRow.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return _to_domain(row) if row is not None else None
 
     async def count(self) -> int:
         """How many runs the table holds — the denominator ``list_recent`` pages through."""

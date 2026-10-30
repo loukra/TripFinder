@@ -155,6 +155,29 @@ class QueryUnderstandingConfig(BaseModel):
     """
 
 
+class ReuseConfig(BaseModel):
+    """When a question already answered may be answered from the old run (plan §2.15)."""
+
+    enabled: bool = True
+    """Whether this run may consult earlier runs at all.
+
+    ``POST /api/research`` with ``fresh=true`` creates a research with this
+    off, which is plan §2.15 rule 2 — *a fresh run is always one click away,
+    and it never consults the cache*. It lives in the persisted config
+    rather than in a request flag the run forgets, so the run's own record
+    says whether it was allowed to reuse (`PROJECT.md` §21)."""
+
+    window_days: int = Field(default=183, gt=0)
+    """How old an answer may be and still be reused. Six months.
+
+    Long, deliberately, and plan §2.15 gives the reason: the corpus is
+    Reddit threads admitted up to fifteen years old (``TriageFloors``), so a
+    fortnight changes almost nothing in it. The honest constraint on reuse
+    is not freshness but consent — the user must always be able to say *run
+    it again*, and must never be shown an old answer that looks new. Both of
+    those are enforced elsewhere, which is what lets this number be generous."""
+
+
 class PrefilterConfig(BaseModel):
     """Cheap pre-filtering heuristics (plan §4.6 step 6).
 
@@ -231,6 +254,7 @@ class ResearchConfig(BaseModel):
     source_health_floors: SourceHealthFloors = Field(default_factory=SourceHealthFloors)
     triage_floors: TriageFloors = Field(default_factory=TriageFloors)
     query_understanding: QueryUnderstandingConfig = Field(default_factory=QueryUnderstandingConfig)
+    reuse: ReuseConfig = Field(default_factory=ReuseConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)
     quote_verification: QuoteVerificationConfig = Field(default_factory=QuoteVerificationConfig)

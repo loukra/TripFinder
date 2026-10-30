@@ -5,6 +5,12 @@ import { RunView } from "./RunView";
 import * as api from "@/lib/api";
 import type { ResearchResultsResponse, ResearchStatusResponse } from "@/lib/types";
 
+const push = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+}));
+
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof api>("@/lib/api");
   return {
@@ -13,6 +19,7 @@ vi.mock("@/lib/api", async () => {
     getResults: vi.fn(),
     clarifyResearch: vi.fn(),
     cancelResearch: vi.fn(),
+    createResearch: vi.fn(),
     // Real polling is 2 s. A test that has to *catch* a transient status
     // inside that window is a test that depends on how fast the machine is,
     // which is exactly how this suite went red on CI and stayed green here.
@@ -28,6 +35,7 @@ function statusResponse(overrides: Partial<ResearchStatusResponse> = {}): Resear
     query: "underrated states",
     normalized_query: null,
     created_at: "2026-03-01T12:00:00Z",
+    reused: null,
     statistics: {},
     diagnostics: {
       source_health: [],
@@ -49,6 +57,7 @@ const resultsResponse: ResearchResultsResponse = {
   provisional: false,
   weak_results: [],
   minimum_independent_users: 5,
+  reused: null,
   results: [
     {
       entity_id: "state:alaska",
@@ -454,5 +463,53 @@ describe("A run that is still counting", () => {
       await screen.findByText("Something went wrong inside this research. Nothing was produced.")
     ).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("Alaska")).not.toBeInTheDocument());
+  });
+
+  // Plan §2.15 rule 2 — a fresh run is always one click away, and it never
+  // consults the cache.
+  describe("when the answer came from an earlier run", () => {
+    const REUSED = { research_id: "r0", answered_at: "2026-03-04T09:30:00Z" };
+
+    beforeEach(() => {
+      push.mockClear();
+      vi.mocked(api.getResearch).mockResolvedValue(
+        statusResponse({ status: "completed", message: "Finished.", reused: REUSED })
+      );
+      vi.mocked(api.getResults).mockResolvedValue({ ...resultsResponse, reused: REUSED });
+    });
+
+    it("says when the answer was produced", async () => {
+      render(<RunView researchId="r1" />);
+
+      expect(await screen.findByRole("note")).toHaveTextContent("Answered on 4 March 2026");
+    });
+
+    it("asks for a fresh run and goes to it", async () => {
+      const user = userEvent.setup();
+      vi.mocked(api.createResearch).mockResolvedValue({ id: "r2", status: "pending" });
+      render(<RunView researchId="r1" />);
+
+      await user.click(await screen.findByRole("button", { name: "Research it again" }));
+
+      await waitFor(() =>
+        expect(api.createResearch).toHaveBeenCalledWith("underrated states", { fresh: true })
+      );
+      await waitFor(() => expect(push).toHaveBeenCalledWith("/research/r2"));
+    });
+
+    it("says so, and stays put, when the fresh run cannot be started", async () => {
+      const user = userEvent.setup();
+      vi.mocked(api.createResearch).mockRejectedValue(
+        new api.ApiError(503, { message: "the queue is unavailable" })
+      );
+      render(<RunView researchId="r1" />);
+
+      await user.click(await screen.findByRole("button", { name: "Research it again" }));
+
+      expect(await screen.findByText(/queue is unavailable/)).toBeInTheDocument();
+      expect(push).not.toHaveBeenCalled();
+      // The old answer is still on screen, still labelled for what it is.
+      expect(screen.getByRole("note")).toHaveTextContent("Answered on 4 March 2026");
+    });
   });
 });

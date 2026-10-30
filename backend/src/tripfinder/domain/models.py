@@ -224,6 +224,28 @@ class ResearchPlan(BaseModel):
     candidate_subreddits: list[str] = Field(default_factory=list)
 
 
+class ReusedAnswer(BaseModel):
+    """This run did not do the work: it is showing an earlier run's answer (plan §2.15).
+
+    The two fields travel together on purpose. Plan §2.15 rule 1 is that a
+    reused answer says *when it was produced*, and the way to make a label
+    impossible to omit is to make the fact and the date one object — there
+    is no state in which a client knows an answer was reused and does not
+    also have the date to say so.
+
+    ``answered_at`` is the **original** run's date, never this one's, and
+    never a date inherited from a run that was itself reusing: only a run
+    that actually did the work may answer for a later question, so the chain
+    is one link long by construction (``AnswerReuseStep``).
+    """
+
+    research_id: UUID
+    """The run whose answer this is — reachable at its own URL since 14.9."""
+
+    answered_at: datetime
+    """When that run was started, which is when this answer was produced."""
+
+
 class ClarificationOption(BaseModel):
     """One choice offered back to the user, mapped to a candidate granularity (plan §6)."""
 
@@ -557,6 +579,28 @@ class Research(BaseModel):
     """Set only when a clarified research is queued to resume mid-pipeline (plan §6): the
     worker seeds it straight into the resumed run's context and skips Query Understanding
     and Preflight entirely, since both already ran before the research paused."""
+    plan: ResearchPlan | None = None
+    """The plan this run actually ran against, kept so the run can be found again (plan §2.15).
+
+    ``resume_plan`` looks similar and is not the same thing: that one is a
+    *instruction to a worker*, set on the clarification path only and
+    meaningless once the run is over. This is the run's record of what its
+    question was understood to mean, stamped on every run that got past
+    Query Understanding, and it is what ``plan_fingerprint`` is computed
+    from."""
+    plan_fingerprint: str | None = None
+    """``plan_fingerprint(self.plan)`` — the reuse key, stored so it can be indexed.
+
+    Derived, and stored anyway: a fingerprint recomputed at query time
+    cannot be looked up in a database, and recomputing it for every row of a
+    growing table to answer one question is the shape of a feature that gets
+    switched off later."""
+    reused: ReusedAnswer | None = None
+    """Set when this run answered from an earlier one instead of doing the work (plan §2.15).
+
+    Present on the API in every place this run's answer is shown, and the
+    reason the frontend can never render a six-month-old ranking as though
+    it were produced today."""
 
 
 HALTING_STATUSES: frozenset[ResearchStatus] = frozenset(
@@ -579,3 +623,30 @@ object that must not exist.
 def is_halting(status: ResearchStatus) -> bool:
     """Whether the pipeline must stop rather than run its remaining steps."""
     return status in HALTING_STATUSES
+
+
+REUSABLE_STATUSES: frozenset[ResearchStatus] = frozenset(
+    {
+        ResearchStatus.COMPLETED,
+        # A run stopped by its own duration budget (plan §2.12.2). It read
+        # what it read properly; the corpus is a real but incomplete
+        # sample, and saying so is what `completed_partial` is *for*.
+        ResearchStatus.COMPLETED_PARTIAL,
+    }
+)
+"""Runs whose answer may be shown for a later asking of the same question (plan §2.15).
+
+Here rather than in the step that applies it, because the repository has to
+find such a run and the step has to accept one, and a rule stated twice is a
+rule that drifts — leaving rows that are findable but unusable, or worse, the
+other way round.
+
+§2.15's acceptance said ``completed`` alone until it was measured (§2.15.2):
+no real run has ever reached it, because every one stops at the duration
+budget. The distinction that matters is not "finished" but "was this a real
+reading?" — and everything absent from this set is absent for a reason §7.1
+already states. ``completed_degraded`` had an unhealthy source and no
+trustworthy denominator (§8.1 rule 2); ``failed`` and ``source_unavailable``
+have no corpus at all; ``cancelled`` was stopped part-way by a person, and
+its snapshot is display state, never a run's answer (§2.13.2).
+"""

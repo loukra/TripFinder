@@ -672,6 +672,46 @@ fieldset {
   margin-bottom: 18px;
 }
 
+/* A reused answer is neither provisional nor degraded: it is a finished
+   answer that was produced earlier (plan §2.15). It is quiet on purpose —
+   nothing is wrong — but it is never absent, because an answer from March
+   shown under today's date is the §0.1 failure with a longer fuse. */
+.banner-reused {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-divider);
+  margin-bottom: 18px;
+}
+
+.banner-reused-action {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-800);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.banner-reused-action:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* One line of history says the same thing the run's own page does. */
+.run-reused {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
 /* Anything that paints its own background has to bring its own foreground
    for both themes, or it inherits a light-on-light — which is how the
    provisional banner became unreadable on a dark ground. */
@@ -679,6 +719,10 @@ fieldset {
   .banner-provisional {
     background: var(--color-accent-2-900);
     color: var(--color-accent-2-200);
+  }
+
+  .banner-reused-action {
+    color: var(--color-accent-300);
   }
 
   .banner-degraded,
