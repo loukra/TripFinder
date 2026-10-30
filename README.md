@@ -168,6 +168,65 @@ would also register it where the pipeline is assembled.
 
 ## Architecture
 
+### System overview
+
+The web app and the research run separately. The API stores each run as a row and a job in
+Postgres; a worker picks up the job, does the research and writes progress and rankings back,
+which the page polls.
+
+```mermaid
+flowchart LR
+    UI["Browser<br/>Next.js + React"] -->|"start a run,<br/>poll its progress"| API["API<br/>FastAPI"]
+    API -->|"run + job"| DB[("Postgres<br/>runs · jobs · rankings")]
+    DB <-->|"claims the job,<br/>writes progress<br/>and rankings"| WORKER["Worker<br/>runs the research"]
+
+    subgraph External["External services"]
+        SERPER["Serper<br/>Google search"]
+        ARCTIC["Arctic Shift<br/>Reddit archive"]
+        OPENAI["OpenAI<br/>reads the comments"]
+    end
+
+    WORKER -->|"find threads"| SERPER
+    WORKER -->|"fetch comments"| ARCTIC
+    WORKER -->|"analyse comments"| OPENAI
+```
+
+### One run, end to end
+
+Searching, picking threads and reading comments do not wait for each other. Every useful thread
+starts its own strand right away, while the search is still going, and a running tally turns what
+has been read so far into the ranking the page shows.
+
+```mermaid
+flowchart TB
+    Q(["Question"]) --> PRE["Check that the Reddit archive answers"]
+    PRE --> QU["Understand the question<br/>kind of place, criteria"]
+    QU -->|"unclear"| ASK["Ask the user"]
+    ASK -->|"answer"| REUSE
+    QU --> REUSE{"Answered in the<br/>last six months?"}
+    REUSE -->|"yes"| OLD(["Show that answer, with its date"])
+    REUSE -->|"no"| LIVE
+
+    subgraph LIVE["In parallel, up to 3 minutes"]
+        SEARCH["Search rounds<br/>Serper"] -->|"threads as they are found"| TRIAGE["Keep threads that<br/>answer the question"]
+        TRIAGE -->|"one strand per thread"| STRAND["Fetch comments<br/>Arctic Shift<br/>↓<br/>Analyse them<br/>OpenAI"]
+        STRAND --> TALLY["Running tally"]
+    end
+
+    TALLY -.->|"provisional ranking"| PAGE(["Page shows the ranking growing"])
+    LIVE --> HEALTH["Check how much of the source answered"]
+    HEALTH --> MERGE["Merge place names"]
+    MERGE --> VOTE["One person, one vote"]
+    VOTE --> COUNT["Count and rank<br/>at least five people per place"]
+    COUNT --> SUM["Summaries from quotes<br/>found in the comments"]
+    SUM --> RESULT(["Result"])
+```
+
+The provisional rankings and the final one are computed by the same code, so the numbers on the
+page only ever grow into the final answer.
+
+### Code layout
+
 ```
 frontend/   Next.js + React. Polls a run and shows the ranking as it grows.
 backend/
@@ -181,9 +240,7 @@ backend/
   jobs/        Postgres-backed work queue.
 ```
 
-A run is a row in Postgres and a job in a queue. The worker picks it up and writes progress back
-as it goes; the API serves what the page shows at each stage. `domain/` and `ranking/` import
-nothing from the adapters, and a test checks that.
+`domain/` and `ranking/` import nothing from the adapters, and a test checks that.
 
 ---
 
