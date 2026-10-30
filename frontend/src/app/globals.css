@@ -614,7 +614,7 @@ body:has(.page-run) .site-header {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  align-items: flex-end;
+  align-items: flex-start;
   padding: clamp(20px, 5vw, 48px) 0 0;
 }
 
@@ -624,12 +624,35 @@ body:has(.page-run) .site-header {
 
 .section-kicker {
   font-size: 13px;
+  line-height: 20px;
   margin-bottom: 6px;
 }
 
 .section-query {
   font-size: clamp(24px, 4.5vw, 32px);
   max-width: 24ch;
+}
+
+/* Level with the question's first line, not floating at its last: the
+   kicker above the question is 20px plus 6px, the button and that line are
+   the same height. */
+.run-head-action {
+  margin-top: 26px;
+}
+
+/* Wrapped under the question on a phone, it needs no lining up. */
+@media (max-width: 640px) {
+  .run-head-action {
+    margin-top: 0;
+  }
+}
+
+.run-outcome {
+  margin-top: 12px;
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
 }
 
 .panel {
@@ -783,10 +806,10 @@ body:has(.page-run) .site-header {
 
 .run-layout {
   display: grid;
-  grid-template-columns: minmax(0, 280px) minmax(0, 1fr) minmax(0, 260px);
-  gap: 22px;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr) minmax(0, 260px);
+  gap: 26px;
   align-items: start;
-  margin-top: 22px;
+  margin-top: 36px;
 }
 
 .run-side {
@@ -811,12 +834,15 @@ body:has(.page-run) .site-header {
   max-width: 820px;
 }
 
+/* All three columns open with one of these, at one size and one height, so
+   the stage list, the first result and the first counter start level. */
 .run-side-heading {
   font-size: 12px;
+  line-height: 16px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-accent-700);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .progress-status {
@@ -846,7 +872,7 @@ body:has(.page-run) .site-header {
   border-radius: 999px;
   background: var(--color-divider);
   overflow: hidden;
-  margin: 18px 0 26px;
+  margin: 14px 0 18px;
 }
 
 .progress-fill {
@@ -908,6 +934,39 @@ body:has(.page-run) .site-header {
   margin-left: auto;
   text-align: right;
   font-size: 12px;
+}
+
+/* A finished run has passed every stage. Five full-size cards each saying
+   "Done" is a column of noise beside the answer, so the list folds into one
+   quiet card: the stages are still named, just not shouted. */
+.stage-list.is-finished {
+  gap: 0;
+  padding: 6px 0;
+  border-radius: 22px;
+  background: var(--color-surface);
+}
+
+.stage-list.is-finished .stage-row {
+  padding: 9px 16px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.stage-list.is-finished .stage-row + .stage-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+.stage-list.is-finished .stage-mark {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+}
+
+.stage-list.is-finished .stage-label {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .stat-grid {
@@ -1111,14 +1170,22 @@ body:has(.page-run) .site-header {
 
 .result-denominator {
   font-size: 13px;
-  margin-bottom: 12px;
 }
 
+/* The evidence toggle sits on the denominator's line, centred on it — a
+   margin on the text alone pushed the two out of line with each other. */
 .result-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.result-explanation-withheld {
+  font-size: 13px;
+  line-height: 1.55;
+  font-style: italic;
+  margin-bottom: 10px;
 }
 
 .result-evidence-toggle {
@@ -1141,8 +1208,10 @@ body:has(.page-run) .site-header {
 }
 
 .evidence-count {
-  font-size: 12px;
-  margin-bottom: 10px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
 }
 
 .evidence-list {
@@ -1162,13 +1231,14 @@ body:has(.page-run) .site-header {
 .evidence-thread-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 12px 16px;
   border-radius: 16px;
   background: var(--color-surface);
 }
 
 .evidence-thread {
+  font-weight: 600;
   font-size: 14px;
   line-height: 1.4;
 }
@@ -1176,17 +1246,27 @@ body:has(.page-run) .site-header {
 .evidence-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
 }
 
+.evidence-meta > .text-muted {
+  margin-right: 6px;
+}
+
+/* One chip per counted comment: one person, one link. */
 .evidence-comment {
   text-decoration: none;
   white-space: nowrap;
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
 .evidence-comment:hover {
-  text-decoration: underline;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .evidence-more {
@@ -1258,10 +1338,13 @@ body:has(.page-run) .site-header {
 
 /* — history (plan §2.15) — */
 
+/* Pulled out by the ghost button's own inline padding, so the link text —
+   not its invisible hover pad — lines up with the page's right edge. */
 .site-nav {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-right: calc(-1 * var(--space-1));
 }
 
 .history-list {
