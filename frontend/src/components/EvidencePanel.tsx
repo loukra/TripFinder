@@ -5,6 +5,75 @@ import { ApiError, getEvidence } from "@/lib/api";
 
 const PAGE_SIZE = 10;
 
+// `/r/<community>/comments/<post id>/<title slug>/<comment id>/`
+const REDDIT_COMMENT = /^\/r\/([^/]+)\/comments\/([^/]+)\/([^/]+)\/([^/]+)\/?$/;
+
+interface DescribedPermalink {
+  /** Same for every comment in one thread. */
+  threadKey: string;
+  thread: string;
+  community: string;
+}
+
+/**
+ * A comment permalink as a reader would name it: the thread it was written
+ * in and where. The link itself is unchanged; only its text is. Anything
+ * that is not a Reddit comment URL keeps its raw address — an unfamiliar
+ * link shown as-is is better than one shown under a guessed name.
+ */
+export function describePermalink(link: string): DescribedPermalink | null {
+  let path: string;
+  try {
+    path = new URL(link).pathname;
+  } catch {
+    return null;
+  }
+  const match = REDDIT_COMMENT.exec(path);
+  if (!match) return null;
+  const thread = match[3].replaceAll("_", " ").trim();
+  if (thread === "") return null;
+  return {
+    threadKey: `${match[1]}/${match[2]}`,
+    thread: thread[0].toUpperCase() + thread.slice(1),
+    community: `r/${match[1]}`,
+  };
+}
+
+type EvidenceGroup =
+  | { kind: "thread"; key: string; thread: string; community: string; links: string[] }
+  | { kind: "raw"; key: string; link: string };
+
+// Several supporters often answered in the same thread. Listed one per row,
+// the thread title repeats down the panel; grouped, each thread is named
+// once and every comment keeps its own link — one person, one link, as
+// counted. Groups keep the order their first comment arrived in.
+function groupByThread(permalinks: string[]): EvidenceGroup[] {
+  const groups: EvidenceGroup[] = [];
+  const byThread = new Map<string, Extract<EvidenceGroup, { kind: "thread" }>>();
+  for (const link of permalinks) {
+    const described = describePermalink(link);
+    if (!described) {
+      groups.push({ kind: "raw", key: link, link });
+      continue;
+    }
+    const existing = byThread.get(described.threadKey);
+    if (existing) {
+      existing.links.push(link);
+      continue;
+    }
+    const group = {
+      kind: "thread" as const,
+      key: described.threadKey,
+      thread: described.thread,
+      community: described.community,
+      links: [link],
+    };
+    byThread.set(described.threadKey, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
 interface EvidencePanelProps {
   researchId: string;
   entityId: string;
@@ -72,16 +141,42 @@ export function EvidencePanel({ researchId, entityId, entityName }: EvidencePane
           ) : (
             <>
               <p className="text-muted evidence-count">
-                {total} discussion{total === 1 ? "" : "s"} cited as evidence
+                {total} comment{total === 1 ? "" : "s"} cited as evidence
               </p>
               <ul className="evidence-list">
-                {permalinks.map((link) => (
-                  <li key={link}>
-                    <a href={link} target="_blank" rel="noopener noreferrer">
-                      {link}
-                    </a>
-                  </li>
-                ))}
+                {groupByThread(permalinks).map((group) =>
+                  group.kind === "raw" ? (
+                    <li key={group.key}>
+                      <a
+                        className="evidence-raw"
+                        href={group.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {group.link}
+                      </a>
+                    </li>
+                  ) : (
+                    <li key={group.key} className="evidence-thread-card">
+                      <span className="evidence-thread">{group.thread}</span>
+                      <span className="evidence-meta">
+                        <span className="text-muted">{group.community}</span>
+                        {group.links.map((link, index) => (
+                          <a
+                            key={link}
+                            className="evidence-comment"
+                            href={link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Comment ${index + 1} in "${group.thread}"`}
+                          >
+                            comment {index + 1} ↗
+                          </a>
+                        ))}
+                      </span>
+                    </li>
+                  )
+                )}
               </ul>
             </>
           )}

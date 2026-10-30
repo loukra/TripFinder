@@ -14,8 +14,17 @@ describe("ProgressView", () => {
       />
     );
 
-    expect(screen.getByText("discovering")).toBeInTheDocument();
+    expect(screen.getByText("Searching")).toBeInTheDocument();
     expect(screen.getByText(/searching for discussions/i)).toBeInTheDocument();
+  });
+
+  // The results carry a finished run's message; the badge still says, in
+  // words, that the answer is only partial.
+  it("labels a finished run without repeating its message", () => {
+    render(<ProgressView status="completed_partial" message="Stopped early on purpose." />);
+
+    expect(screen.getByText("Partial result")).toBeInTheDocument();
+    expect(screen.queryByText(/stopped early/i)).not.toBeInTheDocument();
   });
 
   it("cancels on click", async () => {
