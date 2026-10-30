@@ -36,19 +36,13 @@ STATUS_MESSAGES: dict[ResearchStatus, str] = {
     ResearchStatus.RETRIEVING: "Reading the discussions we found.",
     ResearchStatus.ANALYZING: "Working out what each comment recommends.",
     ResearchStatus.AGGREGATING: "Counting who recommended what.",
-    ResearchStatus.COMPLETED: (
-        "Finished. Every discussion we set out to read was read, so these counts "
-        "reflect what people actually said."
-    ),
+    ResearchStatus.COMPLETED: "Finished. Every discussion found was read.",
     ResearchStatus.COMPLETED_PARTIAL: (
-        "Stopped early on purpose, at a budget or time limit. What we did read was "
-        "read properly, so these counts are a real but incomplete sample."
+        "Stopped at the time limit. Everything read up to then is counted."
     ),
     ResearchStatus.COMPLETED_DEGRADED: (
-        "We could not reach parts of the source during this run. Enough requests "
-        "failed that we cannot tell you what proportion recommended anything — "
-        "percentages are withheld, and the raw numbers below may be skewed by "
-        "which requests happened to succeed."
+        "We could not reach parts of the source, so percentages are withheld. "
+        "The counts may lean towards whatever requests got through."
     ),
     ResearchStatus.SOURCE_UNAVAILABLE: (
         "We could not reach the source at all, so this run gathered no evidence. "

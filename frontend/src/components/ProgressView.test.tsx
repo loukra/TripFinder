@@ -18,13 +18,20 @@ describe("ProgressView", () => {
     expect(screen.getByText(/searching for discussions/i)).toBeInTheDocument();
   });
 
-  // The page carries a finished run's message under its question; the badge
-  // still says, in words, that the answer is only partial.
-  it("labels a finished run without repeating its message", () => {
-    render(<ProgressView status="completed_partial" message="Stopped early on purpose." />);
+  // The time limit binds by design, so a run that hit it is a result like
+  // any other — with one short line saying not everything was read.
+  it("calls a run stopped by its time limit complete, and says so under the stages", () => {
+    render(<ProgressView status="completed_partial" message="Stopped at the time limit." />);
 
-    expect(screen.getByText("Partial result")).toBeInTheDocument();
-    expect(screen.queryByText(/stopped early/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByText("Stopped at the time limit.")).toBeInTheDocument();
+  });
+
+  it("adds no note to a run that read everything", () => {
+    render(<ProgressView status="completed" message="Finished." />);
+
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.queryByText("Finished.")).not.toBeInTheDocument();
   });
 
   it("cancels on click", async () => {

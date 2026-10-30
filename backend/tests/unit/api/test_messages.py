@@ -80,8 +80,8 @@ class TestDegradedIsNeverMistakenForThin:
         partial = status_message(ResearchStatus.COMPLETED_PARTIAL)
         degraded = status_message(ResearchStatus.COMPLETED_DEGRADED)
 
-        assert "on purpose" in partial
-        assert "on purpose" not in degraded
+        assert "time limit" in partial
+        assert "time limit" not in degraded
 
     def test_source_unavailable_promises_nothing_at_all(self) -> None:
         message = status_message(ResearchStatus.SOURCE_UNAVAILABLE)

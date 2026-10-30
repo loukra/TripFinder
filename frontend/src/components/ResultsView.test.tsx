@@ -78,9 +78,9 @@ describe("ResultsView", () => {
     render(<ResultsView researchId="r1" data={makeData()} />);
 
     const oregon = screen.getByText("Oregon").closest("li")!;
-    expect(within(oregon).getByText(/No summary for this one/)).toBeInTheDocument();
+    expect(within(oregon).getByText(/No summary available/)).toBeInTheDocument();
     const alaska = screen.getByText("Alaska").closest("li")!;
-    expect(within(alaska).queryByText(/No summary for this one/)).not.toBeInTheDocument();
+    expect(within(alaska).queryByText(/No summary available/)).not.toBeInTheDocument();
   });
 
   it("shows the explanation on a provisional ranking too", () => {

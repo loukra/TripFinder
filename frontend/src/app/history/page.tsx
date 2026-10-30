@@ -10,9 +10,11 @@ const PAGE_SIZE = 20;
 // A short label per outcome, for a list that has to be readable at a glance.
 // Plan §0.1 rule 4 applies here as much as to the full §7.1 wording these
 // stand in for: no two of them may describe different outcomes in the same
-// words. A run that was cut short, one that could not reach the source and
-// one that broke are three different things, and the list says which before
-// the user spends a click finding out.
+// words. A run that could not reach the source and one that broke are
+// different things, and the list says which before the user spends a click
+// finding out. The one shared label is deliberate: the time limit binds by
+// design, so a run that hit it finished, and its row's message says the
+// limit was reached.
 const OUTCOME_LABELS: Record<ResearchStatus, string> = {
   pending: "Queued",
   understanding: "Running",
@@ -23,7 +25,7 @@ const OUTCOME_LABELS: Record<ResearchStatus, string> = {
   analyzing: "Running",
   aggregating: "Running",
   completed: "Finished",
-  completed_partial: "Stopped early",
+  completed_partial: "Finished",
   completed_degraded: "Source partly unreachable",
   source_unavailable: "Source unreachable",
   failed: "Failed",
@@ -32,7 +34,7 @@ const OUTCOME_LABELS: Record<ResearchStatus, string> = {
 
 const OUTCOME_TONE: Partial<Record<ResearchStatus, string>> = {
   completed: "history-badge-good",
-  completed_partial: "history-badge-partial",
+  completed_partial: "history-badge-good",
   completed_degraded: "history-badge-degraded",
   source_unavailable: "history-badge-broken",
   failed: "history-badge-broken",

@@ -32,7 +32,7 @@ export function RunStats({ statistics }: RunStatsProps) {
 
   return (
     <section className="run-stats" aria-label="What this run has read">
-      <h2 className="run-side-heading">Corpus</h2>
+      <h2 className="run-side-heading">What we read</h2>
       {headline.length > 0 && (
         <dl className="stat-grid">
           {headline.map(({ key, label }) => (

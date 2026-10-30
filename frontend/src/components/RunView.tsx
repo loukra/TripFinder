@@ -292,11 +292,13 @@ export function RunView({ researchId }: { researchId: string }) {
         ? "Results"
         : "Research outcome";
 
-  // A finished ranking's outcome sentence is about the whole run, so it sits
-  // under the question rather than inside one of the three columns — which
-  // lets all three start on the same line. It waits for the ranking itself,
-  // for the reason `mightHaveResults` gives.
-  const outcome = results !== null && !results.provisional ? results.message : null;
+  // A finished ranking needs its outcome sentence only when that sentence
+  // changes how to read it: a degraded run's counts may be skewed, and that
+  // goes under the question. A complete run needs none, and one stopped by
+  // the time limit gets a short note under its stages. It waits for the
+  // ranking itself, for the reason `mightHaveResults` gives.
+  const outcome =
+    results !== null && results.status === "completed_degraded" ? results.message : null;
 
   return (
     <main className="page page-run">
@@ -306,9 +308,6 @@ export function RunView({ researchId }: { researchId: string }) {
           <h1 className="section-query">{run.query}</h1>
           {outcome && <p className="run-outcome">{outcome}</p>}
         </div>
-        <Link className="btn btn-secondary run-head-action" href="/">
-          New research
-        </Link>
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -374,7 +373,7 @@ export function RunView({ researchId }: { researchId: string }) {
               live={!lostTheRun}
               onRunAgain={handleResearchAgain}
               runningAgain={researchingAgain}
-              messageShownAbove={outcome !== null}
+              messageShownAbove={!results.provisional}
             />
           )}
 

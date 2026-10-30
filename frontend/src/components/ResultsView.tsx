@@ -19,8 +19,8 @@ interface ResultsViewProps {
   onRunAgain?: () => void;
   /** Whether that request is in flight. */
   runningAgain?: boolean;
-  /** Whether the page already states this ranking's outcome sentence above
-   *  it, so the list does not print it a second time. */
+  /** Whether the page states this ranking's outcome sentence elsewhere (or
+   *  deliberately not at all), so the list does not print it. */
   messageShownAbove?: boolean;
 }
 
@@ -350,8 +350,7 @@ function ResultRow({
             // a blank where the prose should be reads as a bug, not a check.
             !provisional && (
               <p className="text-muted result-explanation-withheld">
-                No summary for this one. Summaries are checked against the comments they quote,
-                and one that does not hold up is left out rather than shown.
+                No summary available.
               </p>
             )
           )}
