@@ -1,6 +1,6 @@
 # TripFinder
 
-**Ask a travel question. Get a ranking of what people on Reddit actually recommend.**
+TripFinder answers travel questions by counting what people recommend on Reddit.
 
 You type something like *"most underrated US states for nature"* or *"best national parks for
 avoiding crowds"*. TripFinder finds the Reddit threads where people answered that question, reads
@@ -9,38 +9,37 @@ mention a place.
 
 ![A finished run: the ranking in the middle, the steps on the left, what was read on the right](docs/screenshots/results.png)
 
-The ranking is counted, not written by a model. A language model reads each comment and notes
-which places it recommends, but the order comes from plain counting. Every number links back to
-the comments behind it, and each summary only uses quotes that really appear in those comments.
+A language model reads each comment and notes which places it recommends. The ranking itself is
+a plain count of those notes, and every result links to the comments behind it. The
+short summary under each place only quotes text that actually appears in those comments.
 
 ---
 
 ## How it works
 
-1. **Understands the question.** It works out what kind of place you mean (a state, a country, a
-   national park) and asks you if that is unclear.
-2. **Searches** for threads where people answer this kind of question, in a few rounds, each one
-   guided by what the last one found.
-3. **Picks the useful threads.** A thread where people answer the question counts. A thread that
-   only talks about the topic, or that asks something easier ("best" instead of "underrated"),
-   does not.
-4. **Reads the comments.** For each one: which places it names, whether it recommends them, how
-   strongly, and a short quote.
-5. **Merges names.** *Canyonlands*, *Canyonlands NP* and *the Needles district* are one place. A
-   built-in catalogue handles most of these; only the unclear ones need a model call.
-6. **Counts.** One person, one vote per place. A place needs at least five different people
-   before it shows up as a recommendation.
-7. **Summarises** each result in a sentence or two, using only quotes from the counted comments.
+1. It works out what kind of place you mean (a state, a country, a national park) and asks you
+   if that is unclear.
+2. It searches for threads where people answer this kind of question. This happens in a few
+   rounds, and each round uses what the previous one found.
+3. It keeps the threads where people actually answer the question. A thread that only talks
+   about the topic, or asks something easier ("best" instead of "underrated"), is skipped.
+4. It reads the comments and notes, for each one, which places it names, whether it recommends
+   them, how strongly, and a short quote.
+5. It merges names that mean the same place, like *Canyonlands*, *Canyonlands NP* and *the
+   Needles district*. A built-in catalogue handles most of these, and only the unclear ones need
+   a model call.
+6. It counts. Each person gets one vote per place, and a place needs at least five different
+   people before it is listed as a recommendation.
+7. It writes a sentence or two about each result, quoting only the counted comments.
 
-The ranking appears while the comments are still being read and fills in as the run goes on. A
-run has a three-minute time limit; if it hits the limit, everything read up to then is counted,
-and the page says so.
+You can watch the ranking build up while the comments are still being read. Reading is limited to
+three minutes. Everything read until then is counted, and the page mentions when the time limit
+was reached.
 
-**Asked before, answered instantly.** If the same question was answered in the last six months,
-TripFinder shows that answer with its date instead of running again. "Research it again" is one
-click away and always starts a fresh run.
+If someone asked the same question in the last six months, TripFinder shows that earlier answer
+with its date instead of running again. A "Research it again" button starts a fresh run anyway.
 
-Every result opens onto the comments it was counted from, grouped by thread:
+Click "View evidence" on a result to see the comments it was counted from, grouped by thread:
 
 ![The comments behind one result, grouped by Reddit thread, each with a link](docs/screenshots/evidence.png)
 
@@ -53,7 +52,7 @@ Every result opens onto the comments it was counted from, grouped by thread:
 
 ### You will need
 
-- **Docker** (only for Postgres; everything else runs natively)
+- **Docker** (only for Postgres, everything else runs natively)
 - **[uv](https://docs.astral.sh/uv/)**, which installs the right Python for you
 - **Node 22+**
 
@@ -102,17 +101,17 @@ SEARCH_PROVIDER=serper
 SERPER_API_KEY=...
 ```
 
-Both providers default to `fake`, so a fresh clone or a test run can never spend money by
-accident. That also means a run without keys stops at its first model call. You can still start
-everything, click through the UI and run the full test suite without any account. Restart
-`make api` and `make worker` after changing `.env`.
+Both providers default to `fake`, so a fresh clone or a test run never spends money by accident.
+Without keys, a research run stops at its first model call, but you can still start everything,
+click through the UI and run the full test suite. Restart `make api` and `make worker` after
+changing `.env`.
 
-**Reddit needs no key.** The comments come from
+Reddit itself needs no key. The comments come from
 [Arctic Shift](https://arctic-shift.photon-reddit.com), a public Reddit archive.
 
-**What a run costs.** One measured five-minute run read about 3 400 comments in roughly 125
-analysis calls, plus about 30 more for everything else. There is no cost cap yet, so keep an eye
-on your provider dashboard for the first few runs.
+As a rough idea of cost: one five-minute run I measured read about 3 400 comments in roughly 125
+analysis calls, plus about 30 more for everything else. There is no cost cap yet, so check your
+provider dashboard after the first few runs.
 
 ### Tests
 
@@ -127,8 +126,8 @@ There is also a browser test: `cd frontend && npx playwright test`.
 
 ## Swapping the services
 
-OpenAI and Serper each sit behind a small interface, so neither is hard-wired anywhere except one
-factory function.
+OpenAI and Serper each sit behind a small interface. The only place either is named is a factory
+function.
 
 ### A different search API
 
@@ -161,8 +160,8 @@ schema.
 ### A different source than Reddit
 
 `SourceAdapter` has three methods (`health_check`, `fetch_documents`, `fetch_comments`), and
-nothing above it knows about Reddit. A forum or a review site would plug in the same way; you
-would also register it where the pipeline is assembled.
+nothing above it knows about Reddit. A forum or a review site would plug in the same way. You
+would also have to register it where the pipeline is assembled.
 
 ---
 
@@ -170,9 +169,9 @@ would also register it where the pipeline is assembled.
 
 ### System overview
 
-The web app and the research run separately. The API stores each run as a row and a job in
-Postgres; a worker picks up the job, does the research and writes progress and rankings back,
-which the page polls.
+The web app and the research run as separate processes. The API stores each run as a row and a
+job in Postgres. A worker picks up the job, does the research and writes its progress and
+rankings back, and the page polls the API for them.
 
 ```mermaid
 flowchart LR
@@ -193,9 +192,9 @@ flowchart LR
 
 ### One run, end to end
 
-Searching, picking threads and reading comments do not wait for each other. Every useful thread
-starts its own strand right away, while the search is still going, and a running tally turns what
-has been read so far into the ranking the page shows.
+Searching, picking threads and reading comments run at the same time. As soon as a useful thread
+turns up, it gets its own strand that fetches and analyses its comments, even while the search is
+still going. A running tally turns everything read so far into the ranking you see on the page.
 
 ```mermaid
 flowchart TB
@@ -222,8 +221,8 @@ flowchart TB
     SUM --> RESULT(["Result"])
 ```
 
-The provisional rankings and the final one are computed by the same code, so the numbers on the
-page only ever grow into the final answer.
+The rankings shown during the run and the final one are computed by the same code, so the final
+ranking is simply the last one in that series.
 
 ### Code layout
 
@@ -246,19 +245,20 @@ backend/
 
 ## How it was built
 
-Built by one developer with [Claude Code](https://claude.com/claude-code) as the coding agent.
-[`PROJECT.md`](PROJECT.md) is the product and architecture brief, and
+I built TripFinder on my own, with [Claude Code](https://claude.com/claude-code) as the coding
+agent. [`PROJECT.md`](PROJECT.md) is the product and architecture brief, and
 [`implementation-plan.md`](implementation-plan.md) splits it into numbered phases. Each phase ran
-through [`/phase`](.claude/commands/phase.md): read the briefs, build that phase and nothing more,
-pass lint, type checks and tests, then stop with a written report to review.
+through [`/phase`](.claude/commands/phase.md), which reads the briefs, builds that one phase, runs
+lint, type checks and tests, and ends with a written report that I review.
 [`CLAUDE.md`](CLAUDE.md) holds the working agreement those sessions followed.
 
 ---
 
 ## Status
 
-Working and usable, still in progress (currently Phase 14.10 of `implementation-plan.md`). Open
-points: the time limit covers the analysis step rather than the whole run, and there is no cost cap
-yet. Each run already records the tokens it used; turning that into a cost is the next step.
+It works and is usable, but it is still in progress (currently Phase 14.10 of
+`implementation-plan.md`). Two things are still open: the time limit only covers the analysis
+step rather than the whole run, and there is no cost cap yet. Each run already records the tokens
+it used, and turning that into a cost is the next step.
 
 Issues and pull requests are welcome.
