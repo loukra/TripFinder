@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Caprasimo, Figtree } from "next/font/google";
+import { SiteNav } from "@/components/SiteNav";
 import "./globals.css";
 
 // The design system's two faces (ds/styles.css). Caprasimo ships a single
@@ -36,11 +37,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <span className="brand-mark" aria-hidden="true" />
             <span className="brand-name">TripFinder</span>
           </Link>
-          <nav className="site-nav" aria-label="Main">
-            <Link className="btn btn-ghost" href="/history">
-              History
-            </Link>
-          </nav>
+          <SiteNav />
         </header>
         {children}
       </body>

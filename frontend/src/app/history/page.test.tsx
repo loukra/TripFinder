@@ -66,7 +66,7 @@ describe("The history page", () => {
 
     const row = async (name: string) => await screen.findByRole("link", { name: new RegExp(name) });
     expect(within(await row("finished one")).getByText("Finished")).toBeInTheDocument();
-    expect(within(await row("cut short")).getByText("Stopped early")).toBeInTheDocument();
+    expect(within(await row("cut short")).getByText("Finished")).toBeInTheDocument();
     expect(within(await row("broken one")).getByText("Failed")).toBeInTheDocument();
     expect(within(await row("stopped one")).getByText("Cancelled")).toBeInTheDocument();
   });

@@ -25,7 +25,7 @@ So: no language model decides the ranking — the maths is deterministic. Every 
 verified to exist in the comment it is attributed to, and one that cannot be found is dropped and
 counted as dropped. Every run reports what it *could not* read, and why, so a thin answer caused by
 a broken source is distinguishable from a thin answer caused by nobody having an opinion. A run
-that stops early says "stopped early", never "finished". A ranking that is still being counted
+that hits its time limit says so next to its result. A ranking that is still being counted
 shows counts and **no percentages**, because the denominator is not final yet.
 
 If you only read one file, read [`PROJECT.md`](PROJECT.md) — it is the argument behind all of that.
@@ -62,8 +62,8 @@ answer always says the date it was produced, wherever it appears, and **"Researc
 always one click away and never looks at the cache**.
 
 Only a run that read its corpus properly may answer for a later question. A run stopped by its own
-time budget qualifies — it read what it read properly, and it stays labelled as partial when it is
-reused, rather than being quietly promoted to "finished". A run whose source was unhealthy, or that
+time budget qualifies — everything it read was counted in full, and it still says the limit was
+reached when it is reused. A run whose source was unhealthy, or that
 failed or was cancelled, never answers for anything.
 
 Every count opens onto the comments it was counted from, grouped by thread:

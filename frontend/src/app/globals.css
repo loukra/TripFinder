@@ -630,21 +630,7 @@ body:has(.page-run) .site-header {
 
 .section-query {
   font-size: clamp(24px, 4.5vw, 32px);
-  max-width: 24ch;
-}
-
-/* Level with the question's first line, not floating at its last: the
-   kicker above the question is 20px plus 6px, the button and that line are
-   the same height. */
-.run-head-action {
-  margin-top: 26px;
-}
-
-/* Wrapped under the question on a phone, it needs no lining up. */
-@media (max-width: 640px) {
-  .run-head-action {
-    margin-top: 0;
-  }
+  max-width: 40ch;
 }
 
 .run-outcome {
@@ -960,6 +946,13 @@ body:has(.page-run) .site-header {
   width: 20px;
   height: 20px;
   font-size: 11px;
+}
+
+.stage-note {
+  margin-top: 10px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .stage-list.is-finished .stage-label {
@@ -1338,13 +1331,10 @@ body:has(.page-run) .site-header {
 
 /* — history (plan §2.15) — */
 
-/* Pulled out by the ghost button's own inline padding, so the link text —
-   not its invisible hover pad — lines up with the page's right edge. */
 .site-nav {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-right: calc(-1 * var(--space-1));
+  gap: 10px;
 }
 
 .history-list {

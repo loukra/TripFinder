@@ -34,8 +34,11 @@ const STATUS_LABELS: Record<ResearchStatus, string> = {
   retrieving: "Retrieving",
   analyzing: "Analysing",
   aggregating: "Counting",
+  // A run stopped by its own time limit is the normal way a run ends: the
+  // limit binds by design (plan §2.12.2). It is a result; the note under the
+  // stages says what was left unread.
   completed: "Complete",
-  completed_partial: "Partial result",
+  completed_partial: "Complete",
   completed_degraded: "Degraded result",
   source_unavailable: "Source unavailable",
   failed: "Failed",
@@ -60,9 +63,9 @@ export function ProgressView({ status, message, onCancel, cancelling = false }: 
           the stage list, the first result and the first counter start level. */}
       <h2 className="run-side-heading status-badge">{STATUS_LABELS[status]}</h2>
 
-      {/* A finished run's message sits under the question; repeating it
-          here would print the same paragraph twice. A full bar beside a
-          finished run says nothing the ticks below do not. */}
+      {/* A full bar beside a finished run says nothing the ticks below do
+          not, and its outcome sentence is shown under the stages or, for a
+          degraded run, under the question. */}
       {!finished && (
         <>
           <p className="progress-status">{message}</p>
@@ -94,6 +97,8 @@ export function ProgressView({ status, message, onCancel, cancelling = false }: 
           );
         })}
       </ol>
+
+      {status === "completed_partial" && <p className="text-muted stage-note">{message}</p>}
 
       {onCancel && (
         <div className="progress-actions">

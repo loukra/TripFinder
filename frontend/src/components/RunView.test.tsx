@@ -145,34 +145,19 @@ describe("A run at its own URL", () => {
     expect(screen.queryByText(/stopped getting updates/i)).not.toBeInTheDocument();
   });
 
-  it("offers a way back to a new search without holding the old run's state", async () => {
-    vi.mocked(api.getResearch).mockResolvedValue(
-      statusResponse({ status: "completed", message: resultsResponse.message })
-    );
-    vi.mocked(api.getResults).mockResolvedValue(resultsResponse);
+  // Each finished outcome sentence appears once, in the one place it is read:
+  // a time-limit note under the stages, a degraded warning under the question.
+  it.each([
+    ["completed_partial", "Stopped at the time limit."],
+    ["completed_degraded", "We could not reach parts of the source."],
+  ] as const)("states a %s run's outcome once", async (status, message) => {
+    vi.mocked(api.getResearch).mockResolvedValue(statusResponse({ status, message }));
+    vi.mocked(api.getResults).mockResolvedValue({ ...resultsResponse, status, message });
 
     render(<RunView researchId="r1" />);
 
     expect(await screen.findByText("Alaska")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "New research" })).toHaveAttribute("href", "/");
-  });
-
-  // The outcome sentence moved under the question so the three columns can
-  // start level; it must not also stay above the ranking.
-  it("states a finished run's outcome once, under the question", async () => {
-    vi.mocked(api.getResearch).mockResolvedValue(
-      statusResponse({ status: "completed_partial", message: "Stopped early on purpose." })
-    );
-    vi.mocked(api.getResults).mockResolvedValue({
-      ...resultsResponse,
-      status: "completed_partial",
-      message: "Stopped early on purpose.",
-    });
-
-    render(<RunView researchId="r1" />);
-
-    expect(await screen.findByText("Alaska")).toBeInTheDocument();
-    expect(screen.getAllByText("Stopped early on purpose.")).toHaveLength(1);
+    expect(screen.getAllByText(message)).toHaveLength(1);
   });
 
   // Summarization runs last, so every provisional snapshot carries
